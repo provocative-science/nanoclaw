@@ -183,6 +183,20 @@ function registerGroup(jid: string, group: RegisteredGroup): void {
     }
   }
 
+  // Copy .mcp.json template for MCP server config (e.g. Confluence)
+  const mcpJsonFile = path.join(groupDir, '.mcp.json');
+  if (!fs.existsSync(mcpJsonFile)) {
+    const mcpTemplate = path.join(
+      GROUPS_DIR,
+      group.isMain ? 'main' : 'global',
+      '.mcp.json',
+    );
+    if (fs.existsSync(mcpTemplate)) {
+      fs.copyFileSync(mcpTemplate, mcpJsonFile);
+      logger.info({ folder: group.folder }, 'Created .mcp.json from template');
+    }
+  }
+
   // Ensure a corresponding OneCLI agent exists (best-effort, non-blocking)
   ensureOneCLIAgent(jid, group);
 
