@@ -27,10 +27,7 @@ export function loadAutoRegisterConfig(
     raw = fs.readFileSync(filePath, 'utf-8');
   } catch (err: unknown) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return DEFAULT_CONFIG;
-    logger.warn(
-      { err, path: filePath },
-      'auto-register: cannot read config',
-    );
+    logger.warn({ err, path: filePath }, 'auto-register: cannot read config');
     return DEFAULT_CONFIG;
   }
 
@@ -61,9 +58,7 @@ export function loadAutoRegisterConfig(
       | ContainerConfig
       | undefined,
     defaultTrigger:
-      typeof obj.defaultTrigger === 'string'
-        ? obj.defaultTrigger
-        : undefined,
+      typeof obj.defaultTrigger === 'string' ? obj.defaultTrigger : undefined,
     logDenied: obj.logDenied !== false,
   };
 }
