@@ -1,5 +1,6 @@
 import {
   Channel,
+  NewMessage,
   OnInboundMessage,
   OnChatMetadata,
   RegisteredGroup,
@@ -9,6 +10,7 @@ export interface ChannelOpts {
   onMessage: OnInboundMessage;
   onChatMetadata: OnChatMetadata;
   registeredGroups: () => Record<string, RegisteredGroup>;
+  onUnregisteredDM?: (chatJid: string, msg: NewMessage) => void;
 }
 
 export type ChannelFactory = (opts: ChannelOpts) => Channel | null;

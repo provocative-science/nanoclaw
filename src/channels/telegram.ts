@@ -7,6 +7,7 @@ import { logger } from '../logger.js';
 import { registerChannel, ChannelOpts } from './registry.js';
 import {
   Channel,
+  NewMessage,
   OnChatMetadata,
   OnInboundMessage,
   RegisteredGroup,
@@ -16,6 +17,7 @@ export interface TelegramChannelOpts {
   onMessage: OnInboundMessage;
   onChatMetadata: OnChatMetadata;
   registeredGroups: () => Record<string, RegisteredGroup>;
+  onUnregisteredDM?: (chatJid: string, msg: NewMessage) => void;
 }
 
 /**
@@ -142,10 +144,23 @@ export class TelegramChannel implements Channel {
       // Only deliver full message for registered groups
       const group = this.opts.registeredGroups()[chatJid];
       if (!group) {
-        logger.debug(
-          { chatJid, chatName },
-          'Message from unregistered Telegram chat',
-        );
+        // For unregistered private chats, notify the host for possible auto-registration
+        if (ctx.chat.type === 'private' && this.opts.onUnregisteredDM) {
+          this.opts.onUnregisteredDM(chatJid, {
+            id: msgId,
+            chat_jid: chatJid,
+            sender,
+            sender_name: senderName,
+            content,
+            timestamp,
+            is_from_me: false,
+          });
+        } else {
+          logger.debug(
+            { chatJid, chatName },
+            'Message from unregistered Telegram chat',
+          );
+        }
         return;
       }
 

@@ -55,6 +55,11 @@ import {
   stopRemoteControl,
 } from './remote-control.js';
 import {
+  buildAutoRegistration,
+  isAutoRegisterAllowed,
+  loadAutoRegisterConfig,
+} from './auto-register.js';
+import {
   isSenderAllowed,
   isTriggerAllowed,
   loadSenderAllowlist,
@@ -650,6 +655,45 @@ async function main(): Promise<void> {
       isGroup?: boolean,
     ) => storeChatMetadata(chatJid, timestamp, name, channel, isGroup),
     registeredGroups: () => registeredGroups,
+    onUnregisteredDM: (chatJid: string, msg: NewMessage) => {
+      const cfg = loadAutoRegisterConfig();
+      if (!isAutoRegisterAllowed(msg.sender, cfg)) {
+        if (cfg.logDenied) {
+          logger.debug(
+            { chatJid, sender: msg.sender },
+            'auto-register: denied for sender',
+          );
+        }
+        return;
+      }
+
+      const existingFolders = new Set(
+        Object.values(registeredGroups).map((g) => g.folder),
+      );
+      const group = buildAutoRegistration(
+        msg.sender_name,
+        chatJid,
+        msg.sender,
+        cfg,
+        existingFolders,
+      );
+      registerGroup(chatJid, group);
+      logger.info(
+        {
+          chatJid,
+          sender: msg.sender,
+          name: group.name,
+          folder: group.folder,
+        },
+        'Auto-registered Telegram DM chat',
+      );
+
+      // Store the message that triggered registration so it gets processed
+      storeMessage(msg);
+
+      // Enqueue for processing
+      queue.enqueueMessageCheck(chatJid);
+    },
   };
 
   // Create and connect all registered channels.

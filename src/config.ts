@@ -13,7 +13,7 @@ const envConfig = readEnvFile([
 ]);
 
 export const ASSISTANT_NAME =
-  process.env.ASSISTANT_NAME || envConfig.ASSISTANT_NAME || 'Andy';
+  process.env.ASSISTANT_NAME || envConfig.ASSISTANT_NAME || 'Ghost';
 export const ASSISTANT_HAS_OWN_NUMBER =
   (process.env.ASSISTANT_HAS_OWN_NUMBER ||
     envConfig.ASSISTANT_HAS_OWN_NUMBER) === 'true';
@@ -36,6 +36,12 @@ export const SENDER_ALLOWLIST_PATH = path.join(
   '.config',
   'nanoclaw',
   'sender-allowlist.json',
+);
+export const AUTO_REGISTER_ALLOWLIST_PATH = path.join(
+  HOME_DIR,
+  '.config',
+  'nanoclaw',
+  'auto-register-allowlist.json',
 );
 export const STORE_DIR = path.resolve(PROJECT_ROOT, 'store');
 export const GROUPS_DIR = path.resolve(PROJECT_ROOT, 'groups');
@@ -69,7 +75,7 @@ function escapeRegex(str: string): string {
 }
 
 export function buildTriggerPattern(trigger: string): RegExp {
-  return new RegExp(`^${escapeRegex(trigger.trim())}\\b`, 'i');
+  return new RegExp(`(?:^|\\s)${escapeRegex(trigger.trim())}\\b`, 'i');
 }
 
 export const DEFAULT_TRIGGER = `@${ASSISTANT_NAME}`;

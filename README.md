@@ -17,6 +17,102 @@
 
 ---
 
+## Provocative Science Deployment
+
+This fork runs a Telegram-based AI assistant for the Provocative Science team. It answers questions about our codebases and (planned) monitors a Postgres telemetry database for anomalies.
+
+### What It Does
+
+- **Codebase Q&A** — The agent has read access to our four repos and can answer architecture, implementation, and usage questions via Telegram
+- **Telegram channels** — Bot: @provocative_ax_me_bot. Main private chat (no trigger word needed) and group chats (triggered by `@Ghost`)
+- **Container isolation** — Each group's agent runs in its own Docker container with read-only access to mounted codebases
+
+### Deploying to a New Machine
+
+**Prerequisites:** Linux (x86_64), Node.js 22+, Docker, [Claude Code](https://claude.ai/download)
+
+**1. Clone and set up the fork:**
+
+```bash
+git clone git@github.com:provocative-science/nanoclaw.git
+cd nanoclaw
+git remote add upstream git@github.com:qwibitai/nanoclaw.git
+```
+
+**2. Clone the codebases:**
+
+```bash
+mkdir -p codebase
+git clone git@github.com:provocative-science/co3ntrol.git codebase/co3ntrol
+git clone git@github.com:provocative-science/co2ntrol.git codebase/co2ntrol
+git clone git@github.com:provocative-science/riser-firmware.git codebase/riser-firmware
+git clone git@github.com:provocative-science/backplane-firmware.git codebase/backplane-firmware
+```
+
+Requires a GitHub account with access to the provocative-science org.
+
+**3. Set up secrets:**
+
+Install OneCLI and its CLI:
+
+```bash
+curl -fsSL onecli.sh/install | sh
+curl -fsSL onecli.sh/cli/install | sh
+onecli config set api-host http://127.0.0.1:10254
+```
+
+Add the Anthropic API key:
+
+```bash
+onecli secrets create --name Anthropic --type anthropic --value YOUR_KEY --host-pattern api.anthropic.com
+```
+
+Create `.env`:
+
+```bash
+cat > .env << 'EOF'
+TZ=UTC
+ONECLI_URL=http://127.0.0.1:10254
+TELEGRAM_BOT_TOKEN=<your-telegram-bot-token>
+EOF
+```
+
+Sync to container environment:
+
+```bash
+mkdir -p data/env && cp .env data/env/env
+```
+
+**4. Build and start:**
+
+```bash
+bash setup.sh
+npm run build
+./container/build.sh
+```
+
+Register your Telegram chat and start the service:
+
+```bash
+claude  # then run /setup to complete registration and service setup
+```
+
+### Repos
+
+| Repo | Description |
+|------|-------------|
+| [co3ntrol](https://github.com/provocative-science/co3ntrol) | Central control software (Containerized System) |
+| [co2ntrol](https://github.com/provocative-science/co2ntrol) | Original control software (Pirateship) |
+| [riser-firmware](https://github.com/provocative-science/riser-firmware) | Riser firmware |
+| [backplane-firmware](https://github.com/provocative-science/backplane-firmware) | Backplane firmware |
+
+### Planned
+
+- Postgres telemetry database monitoring for anomaly detection
+- Telegram group notifications when anomalies are detected
+
+---
+
 ## Why I Built NanoClaw
 
 [OpenClaw](https://github.com/openclaw/openclaw) is an impressive project, but I wouldn't have been able to sleep if I had given complex software I didn't understand full access to my life. OpenClaw has nearly half a million lines of code, 53 config files, and 70+ dependencies. Its security is at the application level (allowlists, pairing codes) rather than true OS-level isolation. Everything runs in one Node process with shared memory.
