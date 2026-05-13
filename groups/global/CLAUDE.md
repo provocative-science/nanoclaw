@@ -77,6 +77,125 @@ Standard Markdown works: `**bold**`, `*italic*`, `[links](url)`, `# headings`.
 
 ---
 
+## Mounted codebases (Provocative Science)
+
+Sister repositories live under `codebase/<name>/` on the host (read-only in the container when mounted). The old **`co3ntrol`** monolith was **superseded by `co3ntrol-rs`** and is **not** part of this layout—do not expect a `co3ntrol/` directory unless someone left a stale clone.
+
+| Directory | Role |
+|-----------|------|
+| `co3ntrol-rs` | Rust API backend: Modbus TCP to the Liquefaction Controller and BOP/DAC pod, HTTP API for the GUI and BOP/DAC automation, telemetry to Alloy / Grafana Cloud |
+| `co3ntrol-gui` | Web GUI for liquefaction and BOP/DAC controls (talks to **co3ntrol-rs**) |
+| `high-pressure-co2-plc` | Liquefaction Controller PLC firmware |
+| `backplane-firmware` | Backplane hardware firmware |
+| `riser-firmware` | Riser hardware firmware |
+| `co2ntrol` | **Legacy reference only** — what ran on the pirateship and fed the Postgres telemetry DB; pull when the user asks about that era |
+
+**Keep these trees current:** before answering implementation questions, run a `git_pull` (below) for the relevant repo—or all repos—so answers match the latest `main`.
+
+## IMPORTANT: Always Pull Before Answering Code Questions
+
+Before answering any question about the codebases above, pull the latest code first. The mounted repos may be stale. Do this silently — don't mention the pull to the user unless it fails.
+
+## Updating Source Code Repos
+
+The codebase repos are mounted read-only. To pull latest changes, write an IPC task — the host will run `git pull` where SSH keys are available.
+
+```bash
+# Pull a specific repo
+echo '{"type": "git_pull", "repo": "co3ntrol-rs"}' > /workspace/ipc/tasks/git_pull_$(date +%s).json
+
+# Pull all repos (every git checkout under codebase/)
+echo '{"type": "git_pull"}' > /workspace/ipc/tasks/git_pull_$(date +%s).json
+```
+
+Results are written to `/workspace/ipc/input/git_pull_result_*.json`. Wait a few seconds after writing the task, then check for the result file.
+
+`repo` must match a **directory name** under `codebase/` on the host. Expected checkouts: `co3ntrol-rs`, `co3ntrol-gui`, `high-pressure-co2-plc`, `backplane-firmware`, `riser-firmware`, `co2ntrol` (legacy).
+
+## Observability stack — OTLP, Alloy, Grafana Cloud
+
+When you use Grafana (Explore, dashboards, or the Grafana MCP) against **Prometheus-style metrics**, **Loki logs**, and **Tempo traces** for the high-pressure CO₂ control plane, telemetry is produced by **`co3ntrol-rs`** (the Rust API). The stack below is what you are querying.
+
+### Mental model: three backends, one pipeline
+
+Grafana does **not** store raw telemetry itself. It **queries backends** that behave like three different “databases”:
+
+| Backend (Grafana datasource type) | What it holds | How our data gets there |
+|-------------------------------------|----------------|-------------------------|
+| **Prometheus / Mimir** | Time-series **metrics** (numeric samples over time) | **co3ntrol-rs** exports OTel **metrics** over OTLP/HTTP → **Grafana Alloy** converts and forwards to Grafana Cloud **metrics** endpoints (Mimir-compatible). |
+| **Loki** | **Logs** (timestamped text / structured log lines) | **co3ntrol-rs** bridges `tracing` events to OTel **logs** → Alloy → Loki push API. |
+| **Tempo** | **Distributed traces** (spans, parent/child relationships, latency) | Alloy receives OTLP **traces** and forwards to Grafana Cloud **traces**. The Rust service’s trace pipeline is wired; **spans may be sparse or absent** until instrumentation expands—metrics and logs are the main signal today. |
+
+**Alloy** is the **collector** that runs beside (or near) **co3ntrol-rs**: it listens for **OTLP** and ships to Grafana Cloud using the official `grafana_cloud.stack` module so region-specific URLs are discovered at runtime (no hard-coded regional endpoints in repo config).
+
+Pipeline (simplified):
+
+```
+co3ntrol-rs (Rust) ──OTLP/HTTP :4318──► Grafana Alloy ──► Grafana Cloud metrics (Mimir)
+        │                                        └──► Loki
+        │                                        └──► Tempo
+        └── default base URL: http://localhost:4318
+            (override with OTEL_EXPORTER_OTLP_* env vars if Alloy is remote)
+```
+
+Reference in **co3ntrol-rs**: `alloy/README.md`, `alloy/config.alloy`, and the Rust OTel integration (crate paths such as `control/src/otel/` may still apply—confirm in the tree you pulled).
+
+### What co3ntrol-rs emits (so you filter the right thing)
+
+#### Service identity (use these in Grafana / PromQL / LogQL)
+
+- **Implementation** — **co3ntrol-rs** defines resource attributes at runtime.
+- **`service.name`** — often defaults to **`co3ntrol`** for continuity with existing dashboards (override with `OTEL_SERVICE_NAME`). Primary filter when multiple services hit the same stack.
+- **`service.instance.id`** — UUID per **process**; distinguishes concurrent or restarted instances.
+- **`service.version`** — Cargo package version (release cadence).
+- **`vcs.ref.head.revision`** — short git SHA baked at build time; use for “exact binary build”, not semver alone.
+- **`host.name`**, **`host.arch`**, **`os.type`** — where the binary ran.
+- **`deployment.environment`** — from `DEPLOYMENT_ENVIRONMENT`, default **`dev`**; expect **`prod`** on production hosts.
+
+`OTEL_RESOURCE_ATTRIBUTES` can add more resource labels (see OTel docs); a few keys may interact with the SDK—see the OTel module in **co3ntrol-rs**.
+
+#### Metrics (Prometheus / Mimir)
+
+- **Export interval:** ~**1 s**, aligned with the control loop.
+- **Shape:** essentially every numeric or boolean **leaf** of the live telemetry snapshot (`TimestampedApp` / JSON mirror of the telemetry model in **co3ntrol-rs**) becomes an **OTel gauge** observation.
+- **Naming:** path-like names built from JSON keys, with **`app` / `system`** segments elided where redundant, and **`dacs` / `filters`** turning instance ids into **labels** (e.g. DAC index) rather than exploding the metric name. Details live in **co3ntrol-rs** (search `metrics.rs` under the OTel crate path).
+- **Instrument scope:** meter name is defined in that repo (historically **`co3ntrol`** — see `METER_NAME` in the OTel module).
+
+When you “query Prometheus”, you are usually writing **PromQL** against metric names and labels derived from that tree—think **engineering telemetry** (pressures, temperatures, valve states, setpoints), not HTTP request rates unless we add those later.
+
+#### Logs (Loki)
+
+- **Source:** Rust **`tracing`** events at **INFO and above**, bridged into OTel log records and batched out OTLP.
+- **Noise control:** logs from OTLP transport libraries themselves are filtered to avoid feedback loops (see the logs bridge in the **co3ntrol-rs** OTel code).
+- **Loki hints:** a processor adds attributes suited for Loki routing (`LokiHintProcessor`); treat log lines as **operational narrative** around the same process/instance labels as metrics.
+
+**LogQL** in Explore: constrain by `service_name` / labels your stack maps from OTel resource attributes (exact label names in Loki may follow Grafana Cloud’s OTLP→Loki mapping—use label browser if unsure).
+
+#### Traces (Tempo)
+
+Alloy forwards OTLP **traces** to the cloud stack. **Do not assume rich traces:** the product may not yet emit dense spans everywhere. If Tempo queries return little, pivot to **metrics + logs** for incident analysis unless the user confirms trace instrumentation is active for the path they care about.
+
+### Grafana vs “the databases”
+
+In conversation, people often say “the **Prometheus** / **Loki** / **Tempo** database.” In Grafana Cloud, the implementation may be **Mimir** behind the Prometheus-compatible API—functionally the same for Explore and most tools. When the Grafana MCP runs queries, it is going through **Grafana’s datasource APIs**, not raw SQL.
+
+### Ops pointers (not secrets)
+
+- **Alloy UI / livedebugging:** default local compose exposes **`http://localhost:12345`** (`alloy/docker-compose.yml`).
+- **OTLP ports:** **4318** HTTP (what **co3ntrol-rs** uses by default), **4317** gRPC (also exposed for future/alternate clients).
+- **Alloy credentials:** `GRAFANA_CLOUD_TOKEN` + `GRAFANA_CLOUD_STACK_NAME` live in **`alloy/.env`** (not committed); token is a **Cloud access policy** with metrics/logs/traces write scopes as described in `alloy/README.md`.
+
+Never invent stack URLs or tokens; humans rotate credentials in Grafana / Alloy config.
+
+### Practical tips for analysis tasks
+
+1. **Start from `service.name="co3ntrol"`** (or the overridden `OTEL_SERVICE_NAME`) and narrow by **`deployment.environment`** and **`host.name`**.
+2. **Correlate** an anomaly in metrics with logs in the same **`service.instance.id`** window (restart changes instance id).
+3. **Prefer `vcs.ref.head.revision`** when the user asks whether telemetry came from a **specific build**.
+4. If something is missing in **Tempo**, say so explicitly and fall back to **metrics + logs** rather than implying a tracing gap is a sampling bug without evidence.
+
+*Update this section if the pipeline or semantic conventions change (`alloy/` and the OTel Rust code in **co3ntrol-rs**).*
+
 ## Task Scripts
 
 For any recurring task, use `schedule_task`. Frequent agent invocations — especially multiple times a day — consume API credits and can risk account restrictions. If a simple check can determine whether action is needed, add a `script` — it runs first, and the agent is only called when the check passes. This keeps invocations to a minimum.

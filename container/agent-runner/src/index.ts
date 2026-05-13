@@ -325,6 +325,63 @@ function waitForIpcMessage(): Promise<string | null> {
   });
 }
 
+const GROUP_MCP_JSON = path.join('/workspace/group', '.mcp.json');
+
+type GroupMcpStdioConfig = {
+  command: string;
+  args?: string[];
+  env?: Record<string, string>;
+  type?: string;
+};
+
+/**
+ * Stdio MCP servers from the host-rendered `groups/{folder}/.mcp.json`.
+ * Programmatic `mcpServers` in query() overrides project files (SDK behavior), so we must merge explicitly.
+ */
+function loadGroupMcpServersFromDisk(): Record<string, GroupMcpStdioConfig> {
+  try {
+    if (!fs.existsSync(GROUP_MCP_JSON)) {
+      return {};
+    }
+    const parsed = JSON.parse(fs.readFileSync(GROUP_MCP_JSON, 'utf-8')) as {
+      mcpServers?: Record<string, unknown>;
+    };
+    const servers = parsed?.mcpServers;
+    if (!servers || typeof servers !== 'object') {
+      return {};
+    }
+
+    const out: Record<string, GroupMcpStdioConfig> = {};
+    for (const [name, raw] of Object.entries(servers)) {
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+      const cfg = raw as Record<string, unknown>;
+      if (typeof cfg.command !== 'string') continue;
+
+      const entry: GroupMcpStdioConfig = { command: cfg.command };
+      if (Array.isArray(cfg.args) && cfg.args.every((a): a is string => typeof a === 'string')) {
+        entry.args = cfg.args;
+      }
+      if (cfg.env && typeof cfg.env === 'object' && !Array.isArray(cfg.env)) {
+        const env: Record<string, string> = {};
+        for (const [k, v] of Object.entries(cfg.env as Record<string, unknown>)) {
+          if (typeof v === 'string') env[k] = v;
+        }
+        if (Object.keys(env).length > 0) entry.env = env;
+      }
+      if (typeof cfg.type === 'string') entry.type = cfg.type;
+      out[name] = entry;
+    }
+
+    if (Object.keys(out).length > 0) {
+      log(`MCP from ${GROUP_MCP_JSON}: ${Object.keys(out).join(', ')}`);
+    }
+    return out;
+  } catch (err) {
+    log(`Failed to load ${GROUP_MCP_JSON}: ${err instanceof Error ? err.message : String(err)}`);
+    return {};
+  }
+}
+
 /**
  * Run a single query and stream results via writeOutput.
  * Uses MessageStream (AsyncIterable) to keep isSingleUserTurn=false,
@@ -391,6 +448,8 @@ async function runQuery(
     log(`Additional directories: ${extraDirs.join(', ')}`);
   }
 
+  const groupMcpServers = loadGroupMcpServersFromDisk();
+
   for await (const message of query({
     prompt: stream,
     options: {
@@ -409,13 +468,16 @@ async function runQuery(
         'TeamCreate', 'TeamDelete', 'SendMessage',
         'TodoWrite', 'ToolSearch', 'Skill',
         'NotebookEdit',
-        'mcp__nanoclaw__*'
+        'mcp__nanoclaw__*',
+        'mcp__notion__*',
+        'mcp__grafana__*'
       ],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
       allowDangerouslySkipPermissions: true,
       settingSources: ['project', 'user'],
       mcpServers: {
+        ...groupMcpServers,
         nanoclaw: {
           command: 'node',
           args: [mcpServerPath],

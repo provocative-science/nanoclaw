@@ -19,11 +19,11 @@
 
 ## Provocative Science Deployment
 
-This fork runs a Telegram-based AI assistant for the Provocative Science team. It answers questions about our codebases and (planned) monitors a Postgres telemetry database for anomalies.
+This fork runs a Telegram-based AI assistant for the Provocative Science team. It answers questions about our mounted codebases; Postgres-era telemetry refers to the legacy **co2ntrol** stack on the pirateship (see repos below).
 
 ### What It Does
 
-- **Codebase Q&A** — The agent has read access to our four repos and can answer architecture, implementation, and usage questions via Telegram
+- **Codebase Q&A** — The agent has read access to the cloned repos under `codebase/` (Rust API, GUI, PLC firmware, hardware firmware, and legacy reference) and can answer architecture, implementation, and usage questions via Telegram
 - **Telegram channels** — Bot: @provocative_ax_me_bot. Main private chat (no trigger word needed) and group chats (triggered by `@Ghost`)
 - **Container isolation** — Each group's agent runs in its own Docker container with read-only access to mounted codebases
 
@@ -43,11 +43,15 @@ git remote add upstream git@github.com:qwibitai/nanoclaw.git
 
 ```bash
 mkdir -p codebase
-git clone git@github.com:provocative-science/co3ntrol.git codebase/co3ntrol
-git clone git@github.com:provocative-science/co2ntrol.git codebase/co2ntrol
+git clone git@github.com:provocative-science/co3ntrol-rs.git codebase/co3ntrol-rs
+git clone git@github.com:provocative-science/co3ntrol-gui.git codebase/co3ntrol-gui
+git clone git@github.com:provocative-science/high-pressure-co2-plc.git codebase/high-pressure-co2-plc
 git clone git@github.com:provocative-science/riser-firmware.git codebase/riser-firmware
 git clone git@github.com:provocative-science/backplane-firmware.git codebase/backplane-firmware
+git clone git@github.com:provocative-science/co2ntrol.git codebase/co2ntrol
 ```
+
+The superseded **co3ntrol** repo is intentionally omitted—use **co3ntrol-rs** / **co3ntrol-gui** instead. **co2ntrol** is optional legacy reference (pirateship / Postgres-era).
 
 Requires a GitHub account with access to the provocative-science org.
 
@@ -101,14 +105,16 @@ claude  # then run /setup to complete registration and service setup
 
 | Repo | Description |
 |------|-------------|
-| [co3ntrol](https://github.com/provocative-science/co3ntrol) | Central control software (Containerized System) |
-| [co2ntrol](https://github.com/provocative-science/co2ntrol) | Original control software (Pirateship) |
+| [co3ntrol-rs](https://github.com/provocative-science/co3ntrol-rs) | Rust API backend: Modbus TCP to the Liquefaction Controller and BOP/DAC pod, HTTP API for the GUI and automation, telemetry to Alloy / Grafana Cloud |
+| [co3ntrol-gui](https://github.com/provocative-science/co3ntrol-gui) | Web GUI for liquefaction and BOP/DAC controls (uses **co3ntrol-rs**) |
+| [high-pressure-co2-plc](https://github.com/provocative-science/high-pressure-co2-plc) | Liquefaction Controller PLC firmware |
 | [riser-firmware](https://github.com/provocative-science/riser-firmware) | Riser firmware |
 | [backplane-firmware](https://github.com/provocative-science/backplane-firmware) | Backplane firmware |
+| [co2ntrol](https://github.com/provocative-science/co2ntrol) | **Legacy reference** — original stack on the pirateship; produced Postgres telemetry data (not the active control path) |
 
 ### Planned
 
-- Postgres telemetry database monitoring for anomaly detection
+- Postgres telemetry database monitoring for anomaly detection (legacy **co2ntrol** data)
 - Telegram group notifications when anomalies are detected
 
 ---

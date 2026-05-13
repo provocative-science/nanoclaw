@@ -183,7 +183,7 @@ function registerGroup(jid: string, group: RegisteredGroup): void {
     }
   }
 
-  // Copy .mcp.json template for MCP server config (e.g. Confluence)
+  // Copy .mcp.json template for MCP server config (stdio servers from render-mcp.sh)
   const mcpJsonFile = path.join(groupDir, '.mcp.json');
   if (!fs.existsSync(mcpJsonFile)) {
     const mcpTemplate = path.join(

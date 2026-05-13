@@ -1,5 +1,7 @@
+import { execFile } from 'child_process';
 import fs from 'fs';
 import path from 'path';
+import { promisify } from 'util';
 
 import { CronExpressionParser } from 'cron-parser';
 
@@ -166,6 +168,8 @@ export async function processTaskIpc(
     groupFolder?: string;
     chatJid?: string;
     targetJid?: string;
+    // For git_pull
+    repo?: string;
     // For register_group
     jid?: string;
     name?: string;
@@ -461,6 +465,77 @@ export async function processTaskIpc(
         );
       }
       break;
+
+    case 'git_pull': {
+      // Pull latest changes in codebase repos on the host (where SSH keys live).
+      // Runs `git pull` in each subdirectory of ./codebase (Provocative: co3ntrol-rs,
+      // co3ntrol-gui, high-pressure-co2-plc, firmware repos, co2ntrol legacy, etc.).
+      // Any group can request this — pulling is a safe read-only remote operation.
+      const codebaseDir = path.join(process.cwd(), 'codebase');
+      const requestedRepo =
+        typeof data.repo === 'string' ? data.repo : undefined;
+
+      let repos: string[];
+      try {
+        repos = fs
+          .readdirSync(codebaseDir)
+          .filter((d) =>
+            fs.statSync(path.join(codebaseDir, d)).isDirectory(),
+          );
+      } catch {
+        logger.error('git_pull: codebase directory not found');
+        break;
+      }
+
+      // If a specific repo was requested, validate it exists
+      if (requestedRepo) {
+        if (!repos.includes(requestedRepo) || requestedRepo.includes('..')) {
+          logger.warn(
+            { repo: requestedRepo, sourceGroup },
+            'git_pull: invalid repo name',
+          );
+          break;
+        }
+        repos = [requestedRepo];
+      }
+
+      const execFileAsync = promisify(execFile);
+      const results: string[] = [];
+      for (const repo of repos) {
+        const repoPath = path.join(codebaseDir, repo);
+        try {
+          const { stdout } = await execFileAsync('git', ['pull'], {
+            cwd: repoPath,
+            timeout: 30000,
+          });
+          const summary = stdout.trim() || 'up to date';
+          results.push(`${repo}: ${summary}`);
+          logger.info({ repo, sourceGroup, summary }, 'git_pull succeeded');
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          results.push(`${repo}: FAILED — ${msg}`);
+          logger.error({ repo, sourceGroup, err: msg }, 'git_pull failed');
+        }
+      }
+
+      // Write result back so the container can read it
+      const resultPath = path.join(
+        DATA_DIR,
+        'ipc',
+        sourceGroup,
+        'input',
+        `git_pull_result_${Date.now()}.json`,
+      );
+      try {
+        fs.writeFileSync(
+          resultPath,
+          JSON.stringify({ type: 'git_pull_result', results }),
+        );
+      } catch {
+        // Input dir may not exist for all groups — result is also in logs
+      }
+      break;
+    }
 
     default:
       logger.warn({ type: data.type }, 'Unknown IPC task type');
