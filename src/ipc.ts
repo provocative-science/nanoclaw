@@ -13,7 +13,11 @@ import { logger } from './logger.js';
 import { RegisteredGroup } from './types.js';
 
 export interface IpcDeps {
-  sendMessage: (jid: string, text: string) => Promise<void>;
+  sendMessage: (
+    jid: string,
+    text: string,
+    threadId?: string,
+  ) => Promise<void>;
   registeredGroups: () => Record<string, RegisteredGroup>;
   registerGroup: (jid: string, group: RegisteredGroup) => void;
   syncGroups: (force: boolean) => Promise<void>;
@@ -83,7 +87,11 @@ export function startIpcWatcher(deps: IpcDeps): void {
                   isMain ||
                   (targetGroup && targetGroup.folder === sourceGroup)
                 ) {
-                  await deps.sendMessage(data.chatJid, data.text);
+                  await deps.sendMessage(
+                    data.chatJid,
+                    data.text,
+                    typeof data.threadId === 'string' ? data.threadId : undefined,
+                  );
                   logger.info(
                     { chatJid: data.chatJid, sourceGroup },
                     'IPC message sent',
@@ -479,9 +487,7 @@ export async function processTaskIpc(
       try {
         repos = fs
           .readdirSync(codebaseDir)
-          .filter((d) =>
-            fs.statSync(path.join(codebaseDir, d)).isDirectory(),
-          );
+          .filter((d) => fs.statSync(path.join(codebaseDir, d)).isDirectory());
       } catch {
         logger.error('git_pull: codebase directory not found');
         break;

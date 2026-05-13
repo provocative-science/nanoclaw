@@ -213,6 +213,9 @@ export class TelegramChannel implements Channel {
         content: `${placeholder}${caption}`,
         timestamp,
         is_from_me: false,
+        thread_id: ctx.message.message_thread_id
+          ? String(ctx.message.message_thread_id)
+          : undefined,
       });
     };
 

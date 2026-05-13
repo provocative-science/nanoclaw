@@ -43,6 +43,8 @@ export interface ContainerInput {
   isScheduledTask?: boolean;
   assistantName?: string;
   script?: string;
+  /** Telegram forum topic id for mcp__nanoclaw__send_message (matches host outbound routing). */
+  replyThreadId?: string;
 }
 
 export interface ContainerOutput {

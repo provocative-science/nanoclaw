@@ -9,6 +9,7 @@ import {
   escapeXml,
   formatMessages,
   formatOutbound,
+  replyThreadIdFromBatch,
   stripInternalTags,
 } from './router.js';
 import { NewMessage } from './types.js';
@@ -124,6 +125,40 @@ describe('formatMessages', () => {
     expect(result).toContain('1:30');
     expect(result).toContain('PM');
     expect(result).toContain('<context timezone="America/New_York" />');
+  });
+});
+
+// --- replyThreadIdFromBatch ---
+
+describe('replyThreadIdFromBatch', () => {
+  it('returns the newest non-empty thread_id in the batch', () => {
+    const msgs = [
+      makeMsg({ id: '1', thread_id: '9', timestamp: '2024-01-01T00:00:01.000Z' }),
+      makeMsg({ id: '2', thread_id: '7', timestamp: '2024-01-01T00:00:02.000Z' }),
+    ];
+    expect(replyThreadIdFromBatch(msgs)).toBe('7');
+  });
+
+  it('skips trailing messages with no thread_id (e.g. General after a topic)', () => {
+    const msgs = [
+      makeMsg({
+        id: '1',
+        thread_id: '99',
+        content: 'in topic',
+        timestamp: '2024-01-01T00:00:01.000Z',
+      }),
+      makeMsg({
+        id: '2',
+        content: 'general chit-chat',
+        timestamp: '2024-01-01T00:00:02.000Z',
+      }),
+    ];
+    expect(replyThreadIdFromBatch(msgs)).toBe('99');
+  });
+
+  it('returns undefined when no message has a thread_id', () => {
+    const msgs = [makeMsg({ id: '1' }), makeMsg({ id: '2' })];
+    expect(replyThreadIdFromBatch(msgs)).toBeUndefined();
   });
 });
 

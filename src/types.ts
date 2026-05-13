@@ -84,7 +84,8 @@ export interface TaskRunLog {
 export interface Channel {
   name: string;
   connect(): Promise<void>;
-  sendMessage(jid: string, text: string): Promise<void>;
+  /** Optional thread/topic id (e.g. Telegram forum `message_thread_id`). Channels that ignore it omit the parameter. */
+  sendMessage(jid: string, text: string, threadId?: string): Promise<void>;
   isConnected(): boolean;
   ownsJid(jid: string): boolean;
   disconnect(): Promise<void>;

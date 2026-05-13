@@ -7,6 +7,7 @@ import {
   getAllChats,
   getAllRegisteredGroups,
   getLastBotMessageTimestamp,
+  getLatestInboundThreadId,
   getMessagesSince,
   getNewMessages,
   getTaskById,
@@ -30,6 +31,7 @@ function store(overrides: {
   content: string;
   timestamp: string;
   is_from_me?: boolean;
+  thread_id?: string;
 }) {
   storeMessage({
     id: overrides.id,
@@ -39,6 +41,7 @@ function store(overrides: {
     content: overrides.content,
     timestamp: overrides.timestamp,
     is_from_me: overrides.is_from_me ?? false,
+    thread_id: overrides.thread_id,
   });
 }
 
@@ -139,6 +142,75 @@ describe('storeMessage', () => {
     );
     expect(messages).toHaveLength(1);
     expect(messages[0].content).toBe('updated');
+  });
+
+  it('persists thread_id for Telegram forum topics', () => {
+    storeChatMetadata('tg:-1001', '2024-01-01T00:00:00.000Z');
+    store({
+      id: 't1',
+      chat_jid: 'tg:-1001',
+      sender: '1',
+      sender_name: 'U',
+      content: 'in topic',
+      timestamp: '2024-01-01T00:00:01.000Z',
+      thread_id: '42',
+    });
+    const messages = getMessagesSince(
+      'tg:-1001',
+      '2024-01-01T00:00:00.000Z',
+      'Andy',
+    );
+    expect(messages).toHaveLength(1);
+    expect(messages[0].thread_id).toBe('42');
+  });
+});
+
+// --- getLatestInboundThreadId ---
+
+describe('getLatestInboundThreadId', () => {
+  it('returns thread_id from the chronologically latest inbound user message', () => {
+    storeChatMetadata('tg:-1001', '2024-01-01T00:00:00.000Z');
+    store({
+      id: 'a',
+      chat_jid: 'tg:-1001',
+      sender: '1',
+      sender_name: 'A',
+      content: 'first',
+      timestamp: '2024-01-01T00:00:01.000Z',
+      thread_id: '9',
+    });
+    store({
+      id: 'b',
+      chat_jid: 'tg:-1001',
+      sender: '2',
+      sender_name: 'B',
+      content: 'second',
+      timestamp: '2024-01-01T00:00:02.000Z',
+      thread_id: '7',
+    });
+    expect(getLatestInboundThreadId('tg:-1001', 'Andy')).toBe('7');
+  });
+
+  it('returns undefined when the latest inbound message has no thread_id', () => {
+    storeChatMetadata('tg:-1001', '2024-01-01T00:00:00.000Z');
+    store({
+      id: 'a',
+      chat_jid: 'tg:-1001',
+      sender: '1',
+      sender_name: 'A',
+      content: 'in topic',
+      timestamp: '2024-01-01T00:00:01.000Z',
+      thread_id: '9',
+    });
+    store({
+      id: 'b',
+      chat_jid: 'tg:-1001',
+      sender: '2',
+      sender_name: 'B',
+      content: 'general',
+      timestamp: '2024-01-01T00:00:02.000Z',
+    });
+    expect(getLatestInboundThreadId('tg:-1001', 'Andy')).toBeUndefined();
   });
 });
 

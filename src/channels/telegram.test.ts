@@ -102,9 +102,19 @@ function createTextCtx(overrides: {
   messageId?: number;
   date?: number;
   entities?: any[];
+  messageThreadId?: number;
 }) {
   const chatId = overrides.chatId ?? 100200300;
   const chatType = overrides.chatType ?? 'group';
+  const msg: Record<string, unknown> = {
+    text: overrides.text,
+    date: overrides.date ?? Math.floor(Date.now() / 1000),
+    message_id: overrides.messageId ?? 1,
+    entities: overrides.entities ?? [],
+  };
+  if (overrides.messageThreadId !== undefined) {
+    msg.message_thread_id = overrides.messageThreadId;
+  }
   return {
     chat: {
       id: chatId,
@@ -116,12 +126,7 @@ function createTextCtx(overrides: {
       first_name: overrides.firstName ?? 'Alice',
       username: overrides.username ?? 'alice_user',
     },
-    message: {
-      text: overrides.text,
-      date: overrides.date ?? Math.floor(Date.now() / 1000),
-      message_id: overrides.messageId ?? 1,
-      entities: overrides.entities ?? [],
-    },
+    message: msg,
     me: { username: 'andy_ai_bot' },
     reply: vi.fn(),
   };
@@ -273,6 +278,26 @@ describe('TelegramChannel', () => {
           sender_name: 'Alice',
           content: 'Hello everyone',
           is_from_me: false,
+        }),
+      );
+    });
+
+    it('includes thread_id for forum topic messages', async () => {
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const ctx = createTextCtx({
+        text: 'Topic message',
+        messageThreadId: 55,
+      });
+      await triggerTextMessage(ctx);
+
+      expect(opts.onMessage).toHaveBeenCalledWith(
+        'tg:100200300',
+        expect.objectContaining({
+          content: 'Topic message',
+          thread_id: '55',
         }),
       );
     });
@@ -713,6 +738,20 @@ describe('TelegramChannel', () => {
   // --- sendMessage ---
 
   describe('sendMessage', () => {
+    it('passes message_thread_id for forum topic replies', async () => {
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      await channel.sendMessage('tg:100200300', 'In topic', '42');
+
+      expect(currentBot().api.sendMessage).toHaveBeenCalledWith(
+        '100200300',
+        'In topic',
+        { message_thread_id: 42, parse_mode: 'Markdown' },
+      );
+    });
+
     it('sends message via bot API', async () => {
       const opts = createTestOpts();
       const channel = new TelegramChannel('test-token', opts);

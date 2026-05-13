@@ -10,6 +10,21 @@ export function escapeXml(s: string): string {
     .replace(/"/g, '&quot;');
 }
 
+/**
+ * Forum / topic routing for outbound replies: walk the prompt batch from newest
+ * to oldest and use the first non-empty thread_id. Ignores trailing messages with
+ * no thread (e.g. General) so a topic reply is not overridden by newer chit-chat.
+ */
+export function replyThreadIdFromBatch(
+  messages: NewMessage[],
+): string | undefined {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const t = messages[i].thread_id;
+    if (t != null && t !== '') return t;
+  }
+  return undefined;
+}
+
 export function formatMessages(
   messages: NewMessage[],
   timezone: string,
@@ -38,10 +53,11 @@ export function routeOutbound(
   channels: Channel[],
   jid: string,
   text: string,
+  threadId?: string,
 ): Promise<void> {
   const channel = channels.find((c) => c.ownsJid(jid) && c.isConnected());
   if (!channel) throw new Error(`No channel for JID: ${jid}`);
-  return channel.sendMessage(jid, text);
+  return channel.sendMessage(jid, text, threadId);
 }
 
 export function findChannel(

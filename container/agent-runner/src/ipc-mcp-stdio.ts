@@ -19,6 +19,8 @@ const TASKS_DIR = path.join(IPC_DIR, 'tasks');
 const chatJid = process.env.NANOCLAW_CHAT_JID!;
 const groupFolder = process.env.NANOCLAW_GROUP_FOLDER!;
 const isMain = process.env.NANOCLAW_IS_MAIN === '1';
+const replyThreadIdFromHost =
+  process.env.NANOCLAW_REPLY_THREAD_ID?.trim() || undefined;
 
 function writeIpcFile(dir: string, data: object): string {
   fs.mkdirSync(dir, { recursive: true });
@@ -55,6 +57,9 @@ server.tool(
       groupFolder,
       timestamp: new Date().toISOString(),
     };
+    if (replyThreadIdFromHost) {
+      data.threadId = replyThreadIdFromHost;
+    }
 
     writeIpcFile(MESSAGES_DIR, data);
 
