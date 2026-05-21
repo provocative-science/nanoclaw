@@ -68,6 +68,42 @@ server.tool(
 );
 
 server.tool(
+  'send_photo',
+  'Send an image to Telegram from a file under the container workspace (e.g. /workspace/group/…). The host resolves the path and uploads it; only image extensions (png, jpeg, gif, webp, bmp, tiff) are accepted. Optional caption (Telegram limit applies).',
+  {
+    workspace_path: z
+      .string()
+      .describe(
+        'Absolute path inside the container, such as /workspace/group/diagram.png',
+      ),
+    caption: z.string().optional().describe('Optional short caption shown in Telegram'),
+  },
+  async (args) => {
+    const data: Record<string, string | undefined> = {
+      type: 'photo',
+      chatJid,
+      workspacePath: args.workspace_path,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    };
+    if (args.caption?.trim()) {
+      data.caption = args.caption.trim();
+    }
+    if (replyThreadIdFromHost) {
+      data.threadId = replyThreadIdFromHost;
+    }
+
+    writeIpcFile(MESSAGES_DIR, data);
+
+    return {
+      content: [
+        { type: 'text' as const, text: 'Photo queued for delivery to Telegram.' },
+      ],
+    };
+  },
+);
+
+server.tool(
   'schedule_task',
   `Schedule a recurring or one-time task. The task will run as a full agent with access to all tools. Returns the task ID for future reference. To modify an existing task, use update_task instead.
 

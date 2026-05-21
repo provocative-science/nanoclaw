@@ -10,12 +10,16 @@ import { AvailableGroup } from './container-runner.js';
 import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
+import { stripInternalTags } from './router.js';
 import { RegisteredGroup } from './types.js';
+import { resolveContainerWorkspacePathToHost } from './workspace-path.js';
 
 export interface IpcDeps {
-  sendMessage: (
+  sendMessage: (jid: string, text: string, threadId?: string) => Promise<void>;
+  sendPhoto?: (
     jid: string,
-    text: string,
+    hostFilePath: string,
+    caption: string | undefined,
     threadId?: string,
   ) => Promise<void>;
   registeredGroups: () => Record<string, RegisteredGroup>;
@@ -32,6 +36,18 @@ export interface IpcDeps {
 }
 
 let ipcWatcherRunning = false;
+
+const MAX_IPC_PHOTO_BYTES = 50 * 1024 * 1024;
+
+function registeredGroupForFolder(
+  groups: Record<string, RegisteredGroup>,
+  folder: string,
+): RegisteredGroup | undefined {
+  for (const g of Object.values(groups)) {
+    if (g.folder === folder) return g;
+  }
+  return undefined;
+}
 
 export function startIpcWatcher(deps: IpcDeps): void {
   if (ipcWatcherRunning) {
@@ -80,6 +96,9 @@ export function startIpcWatcher(deps: IpcDeps): void {
             const filePath = path.join(messagesDir, file);
             try {
               const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+              const threadIdOpt =
+                typeof data.threadId === 'string' ? data.threadId : undefined;
+
               if (data.type === 'message' && data.chatJid && data.text) {
                 // Authorization: verify this group can send to this chatJid
                 const targetGroup = registeredGroups[data.chatJid];
@@ -87,11 +106,7 @@ export function startIpcWatcher(deps: IpcDeps): void {
                   isMain ||
                   (targetGroup && targetGroup.folder === sourceGroup)
                 ) {
-                  await deps.sendMessage(
-                    data.chatJid,
-                    data.text,
-                    typeof data.threadId === 'string' ? data.threadId : undefined,
-                  );
+                  await deps.sendMessage(data.chatJid, data.text, threadIdOpt);
                   logger.info(
                     { chatJid: data.chatJid, sourceGroup },
                     'IPC message sent',
@@ -101,6 +116,86 @@ export function startIpcWatcher(deps: IpcDeps): void {
                     { chatJid: data.chatJid, sourceGroup },
                     'Unauthorized IPC message attempt blocked',
                   );
+                }
+              } else if (
+                data.type === 'photo' &&
+                data.chatJid &&
+                data.workspacePath
+              ) {
+                const chatJid = String(data.chatJid);
+                const workspacePath = String(data.workspacePath);
+                if (!deps.sendPhoto) {
+                  logger.warn(
+                    { sourceGroup },
+                    'IPC photo dropped: host has no sendPhoto handler',
+                  );
+                } else if (!chatJid.startsWith('tg:')) {
+                  logger.warn(
+                    { chatJid, sourceGroup },
+                    'IPC photo dropped: only Telegram JIDs are supported',
+                  );
+                } else {
+                  const targetGroup = registeredGroups[chatJid];
+                  if (
+                    isMain ||
+                    (targetGroup && targetGroup.folder === sourceGroup)
+                  ) {
+                    const senderRg = registeredGroupForFolder(
+                      registeredGroups,
+                      sourceGroup,
+                    );
+                    const hostPath = resolveContainerWorkspacePathToHost(
+                      workspacePath,
+                      sourceGroup,
+                      isMain,
+                      senderRg,
+                    );
+                    if (!hostPath) {
+                      logger.warn(
+                        { workspacePath, sourceGroup, chatJid },
+                        'IPC photo: invalid or disallowed workspace path',
+                      );
+                    } else {
+                      let size = 0;
+                      try {
+                        size = fs.statSync(hostPath).size;
+                      } catch {
+                        size = -1;
+                      }
+                      if (size < 0 || size > MAX_IPC_PHOTO_BYTES) {
+                        logger.warn(
+                          { hostPath, size, sourceGroup },
+                          'IPC photo: file missing or exceeds size limit',
+                        );
+                      } else {
+                        let caption: string | undefined;
+                        if (
+                          data.caption != null &&
+                          String(data.caption).trim()
+                        ) {
+                          const stripped = stripInternalTags(
+                            String(data.caption),
+                          );
+                          caption = stripped || undefined;
+                        }
+                        await deps.sendPhoto(
+                          chatJid,
+                          hostPath,
+                          caption,
+                          threadIdOpt,
+                        );
+                        logger.info(
+                          { chatJid, sourceGroup, hostPath },
+                          'IPC photo sent',
+                        );
+                      }
+                    }
+                  } else {
+                    logger.warn(
+                      { chatJid, sourceGroup },
+                      'Unauthorized IPC photo attempt blocked',
+                    );
+                  }
                 }
               }
               fs.unlinkSync(filePath);

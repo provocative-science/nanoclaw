@@ -1,5 +1,5 @@
 import https from 'https';
-import { Api, Bot } from 'grammy';
+import { Api, Bot, InputFile } from 'grammy';
 
 import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
 import { readEnvFile } from '../env.js';
@@ -293,6 +293,45 @@ export class TelegramChannel implements Channel {
       );
     } catch (err) {
       logger.error({ jid, err }, 'Failed to send Telegram message');
+    }
+  }
+
+  /** Telegram caption limit */
+  private static readonly CAPTION_MAX = 1024;
+
+  async sendPhoto(
+    jid: string,
+    hostFilePath: string,
+    caption: string | undefined,
+    threadId?: string,
+  ): Promise<void> {
+    if (!this.bot) {
+      logger.warn('Telegram bot not initialized');
+      return;
+    }
+
+    try {
+      const numericId = jid.replace(/^tg:/, '');
+      const options: {
+        message_thread_id?: number;
+        caption?: string;
+      } = {};
+      if (threadId) {
+        options.message_thread_id = parseInt(threadId, 10);
+      }
+      if (caption) {
+        options.caption = caption.slice(0, TelegramChannel.CAPTION_MAX);
+      }
+
+      await this.bot.api.sendPhoto(numericId, new InputFile(hostFilePath), {
+        ...options,
+      });
+      logger.info(
+        { jid, hostFilePath, threadId, hasCaption: Boolean(caption) },
+        'Telegram photo sent',
+      );
+    } catch (err) {
+      logger.error({ jid, hostFilePath, err }, 'Failed to send Telegram photo');
     }
   }
 

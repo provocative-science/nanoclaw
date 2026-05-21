@@ -31,6 +31,12 @@ type Handler = (...args: any[]) => any;
 const botRef = vi.hoisted(() => ({ current: null as any }));
 
 vi.mock('grammy', () => ({
+  InputFile: class MockInputFile {
+    readonly path: string;
+    constructor(p: string) {
+      this.path = p;
+    }
+  },
   Bot: class MockBot {
     token: string;
     commandHandlers = new Map<string, Handler>();
@@ -39,6 +45,7 @@ vi.mock('grammy', () => ({
 
     api = {
       sendMessage: vi.fn().mockResolvedValue(undefined),
+      sendPhoto: vi.fn().mockResolvedValue(undefined),
       sendChatAction: vi.fn().mockResolvedValue(undefined),
     };
 
@@ -837,6 +844,56 @@ describe('TelegramChannel', () => {
       await channel.sendMessage('tg:100200300', 'No bot');
 
       // No error, no API call
+    });
+  });
+
+  describe('sendPhoto', () => {
+    it('passes message_thread_id and caption to Telegram', async () => {
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      await channel.sendPhoto(
+        'tg:100200300',
+        '/tmp/chart.png',
+        'Weekly chart',
+        '42',
+      );
+
+      expect(currentBot().api.sendPhoto).toHaveBeenCalledWith(
+        '100200300',
+        expect.objectContaining({ path: '/tmp/chart.png' }),
+        { message_thread_id: 42, caption: 'Weekly chart' },
+      );
+    });
+
+    it('truncates captions over 1024 characters', async () => {
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const longCap = 'z'.repeat(1100);
+      await channel.sendPhoto('tg:100200300', '/tmp/x.png', longCap);
+
+      expect(currentBot().api.sendPhoto).toHaveBeenCalledWith(
+        '100200300',
+        expect.anything(),
+        { caption: 'z'.repeat(1024) },
+      );
+    });
+
+    it('omits caption in API options when not provided', async () => {
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      await channel.sendPhoto('tg:100200300', '/tmp/a.jpg', undefined, '7');
+
+      expect(currentBot().api.sendPhoto).toHaveBeenCalledWith(
+        '100200300',
+        expect.objectContaining({ path: '/tmp/a.jpg' }),
+        { message_thread_id: 7 },
+      );
     });
   });
 

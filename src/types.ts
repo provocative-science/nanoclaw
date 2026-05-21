@@ -86,6 +86,16 @@ export interface Channel {
   connect(): Promise<void>;
   /** Optional thread/topic id (e.g. Telegram forum `message_thread_id`). Channels that ignore it omit the parameter. */
   sendMessage(jid: string, text: string, threadId?: string): Promise<void>;
+  /**
+   * Send a photo from an existing host file (e.g. agent workspace mapped to the host).
+   * Optional; only Telegram implements this today.
+   */
+  sendPhoto?(
+    jid: string,
+    hostFilePath: string,
+    caption: string | undefined,
+    threadId?: string,
+  ): Promise<void>;
   isConnected(): boolean;
   ownsJid(jid: string): boolean;
   disconnect(): Promise<void>;

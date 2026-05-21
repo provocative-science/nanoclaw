@@ -777,6 +777,19 @@ async function main(): Promise<void> {
       if (!channel) throw new Error(`No channel for JID: ${jid}`);
       return channel.sendMessage(jid, text, threadId);
     },
+    sendPhoto: async (
+      jid: string,
+      hostFilePath: string,
+      caption: string | undefined,
+      threadId?: string,
+    ) => {
+      const channel = findChannel(channels, jid);
+      if (!channel?.sendPhoto) {
+        logger.warn({ jid }, 'No channel sendPhoto support for JID');
+        return;
+      }
+      await channel.sendPhoto(jid, hostFilePath, caption, threadId);
+    },
     registeredGroups: () => registeredGroups,
     registerGroup,
     syncGroups: async (force: boolean) => {
