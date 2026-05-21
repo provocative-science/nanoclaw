@@ -326,6 +326,7 @@ function waitForIpcMessage(): Promise<string | null> {
   });
 }
 
+const GLOBAL_MCP_JSON = path.join('/workspace/global', '.mcp.json');
 const GROUP_MCP_JSON = path.join('/workspace/group', '.mcp.json');
 
 type GroupMcpStdioConfig = {
@@ -335,50 +336,64 @@ type GroupMcpStdioConfig = {
   type?: string;
 };
 
+function parseMcpJsonFile(
+  filePath: string,
+): Record<string, GroupMcpStdioConfig> {
+  if (!fs.existsSync(filePath)) {
+    return {};
+  }
+  const parsed = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as {
+    mcpServers?: Record<string, unknown>;
+  };
+  const servers = parsed?.mcpServers;
+  if (!servers || typeof servers !== 'object') {
+    return {};
+  }
+
+  const out: Record<string, GroupMcpStdioConfig> = {};
+  for (const [name, raw] of Object.entries(servers)) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+    const cfg = raw as Record<string, unknown>;
+    if (typeof cfg.command !== 'string') continue;
+
+    const entry: GroupMcpStdioConfig = { command: cfg.command };
+    if (Array.isArray(cfg.args) && cfg.args.every((a): a is string => typeof a === 'string')) {
+      entry.args = cfg.args;
+    }
+    if (cfg.env && typeof cfg.env === 'object' && !Array.isArray(cfg.env)) {
+      const env: Record<string, string> = {};
+      for (const [k, v] of Object.entries(cfg.env as Record<string, unknown>)) {
+        if (typeof v === 'string') env[k] = v;
+      }
+      if (Object.keys(env).length > 0) entry.env = env;
+    }
+    if (typeof cfg.type === 'string') entry.type = cfg.type;
+    out[name] = entry;
+  }
+  return out;
+}
+
 /**
- * Stdio MCP servers from the host-rendered `groups/{folder}/.mcp.json`.
+ * Stdio MCP servers from `groups/global/.mcp.json`, merged with optional
+ * per-group overrides in `groups/{folder}/.mcp.json`.
  * Programmatic `mcpServers` in query() overrides project files (SDK behavior), so we must merge explicitly.
  */
 function loadGroupMcpServersFromDisk(): Record<string, GroupMcpStdioConfig> {
   try {
-    if (!fs.existsSync(GROUP_MCP_JSON)) {
-      return {};
-    }
-    const parsed = JSON.parse(fs.readFileSync(GROUP_MCP_JSON, 'utf-8')) as {
-      mcpServers?: Record<string, unknown>;
-    };
-    const servers = parsed?.mcpServers;
-    if (!servers || typeof servers !== 'object') {
-      return {};
-    }
-
-    const out: Record<string, GroupMcpStdioConfig> = {};
-    for (const [name, raw] of Object.entries(servers)) {
-      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
-      const cfg = raw as Record<string, unknown>;
-      if (typeof cfg.command !== 'string') continue;
-
-      const entry: GroupMcpStdioConfig = { command: cfg.command };
-      if (Array.isArray(cfg.args) && cfg.args.every((a): a is string => typeof a === 'string')) {
-        entry.args = cfg.args;
-      }
-      if (cfg.env && typeof cfg.env === 'object' && !Array.isArray(cfg.env)) {
-        const env: Record<string, string> = {};
-        for (const [k, v] of Object.entries(cfg.env as Record<string, unknown>)) {
-          if (typeof v === 'string') env[k] = v;
-        }
-        if (Object.keys(env).length > 0) entry.env = env;
-      }
-      if (typeof cfg.type === 'string') entry.type = cfg.type;
-      out[name] = entry;
-    }
+    const globalServers = parseMcpJsonFile(GLOBAL_MCP_JSON);
+    const groupServers = parseMcpJsonFile(GROUP_MCP_JSON);
+    const out = { ...globalServers, ...groupServers };
 
     if (Object.keys(out).length > 0) {
-      log(`MCP from ${GROUP_MCP_JSON}: ${Object.keys(out).join(', ')}`);
+      const sources = [
+        Object.keys(globalServers).length > 0 ? GLOBAL_MCP_JSON : null,
+        Object.keys(groupServers).length > 0 ? GROUP_MCP_JSON : null,
+      ].filter(Boolean);
+      log(`MCP from ${sources.join(' + ')}: ${Object.keys(out).join(', ')}`);
     }
     return out;
   } catch (err) {
-    log(`Failed to load ${GROUP_MCP_JSON}: ${err instanceof Error ? err.message : String(err)}`);
+    log(`Failed to load MCP config: ${err instanceof Error ? err.message : String(err)}`);
     return {};
   }
 }
@@ -429,7 +444,7 @@ async function runQuery(
   // Load global CLAUDE.md as additional system context (shared across all groups)
   const globalClaudeMdPath = '/workspace/global/CLAUDE.md';
   let globalClaudeMd: string | undefined;
-  if (!containerInput.isMain && fs.existsSync(globalClaudeMdPath)) {
+  if (fs.existsSync(globalClaudeMdPath)) {
     globalClaudeMd = fs.readFileSync(globalClaudeMdPath, 'utf-8');
   }
 

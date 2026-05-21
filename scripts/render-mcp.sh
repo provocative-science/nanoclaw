@@ -38,5 +38,6 @@ for d in "$ROOT"/groups/*/; do
 done
 
 echo "Rendered MCP config into $count group directories (groups/*/.mcp.json)."
+echo "Canonical source: groups/global/.mcp.json (agent-runner merges global + per-group overrides)."
 echo "Restart nanoclaw after changing secrets."
 echo "Notion MCP uses npx at agent runtime (network). Grafana uses uvx (installed in the agent image)."

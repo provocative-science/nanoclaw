@@ -2,8 +2,8 @@
   "mcpServers": {
     "notion": {
       "type": "stdio",
-      "command": "npx",
-      "args": ["-y", "@notionhq/notion-mcp-server"],
+      "command": "sh",
+      "args": ["-c", "unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy NODE_USE_ENV_PROXY && npx -y @notionhq/notion-mcp-server"],
       "env": {
         "NOTION_TOKEN": "${NOTION_TOKEN}"
       }

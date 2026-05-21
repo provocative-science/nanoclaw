@@ -256,7 +256,9 @@ Read `/workspace/project/data/registered_groups.json` and format it nicely.
 
 ## Global Memory
 
-You can read and write to `/workspace/project/groups/global/CLAUDE.md` for facts that should apply to all groups. Only update global memory when explicitly asked to "remember this globally" or similar.
+You can read and write to `/workspace/project/groups/global/CLAUDE.md` (or `/workspace/global/CLAUDE.md`) for facts that should apply to all groups. Only update global memory when explicitly asked to "remember this globally" or similar.
+
+**Shared system notes** for all sessions live in **`/workspace/shared/`** (read-write in every group). Point other sessions at files there — not in this group's folder — when capturing operational history, Notion IDs, safety reminders, etc.
 
 ---
 
