@@ -18,7 +18,8 @@
     "lint": "eslint src/",
     "lint:fix": "eslint src/ --fix",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "sync-allowlist": "tsx scripts/sync-auto-register-allowlist.ts"
   },
   "dependencies": {
     "@onecli-sh/sdk": "^0.2.0",

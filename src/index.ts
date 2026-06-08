@@ -64,6 +64,7 @@ import {
   isAutoRegisterAllowed,
   loadAutoRegisterConfig,
 } from './auto-register.js';
+import { startAutoRegisterAllowlistSyncLoop } from './auto-register-sync.js';
 import {
   isSenderAllowed,
   isTriggerAllowed,
@@ -821,6 +822,7 @@ async function main(): Promise<void> {
   });
   queue.setProcessMessagesFn(processGroupMessages);
   recoverPendingMessages();
+  startAutoRegisterAllowlistSyncLoop();
   startMessageLoop().catch((err) => {
     logger.fatal({ err }, 'Message loop crashed unexpectedly');
     process.exit(1);

@@ -386,6 +386,21 @@ export function getMessagesSince(
     .all(chatJid, sinceTimestamp, `${botPrefix}:%`, limit) as NewMessage[];
 }
 
+/** Distinct human senders who have posted in a chat (excludes bot/self). */
+export function getDistinctSendersInChat(chatJid: string): string[] {
+  const rows = db
+    .prepare(
+      `SELECT DISTINCT sender FROM messages
+       WHERE chat_jid = ?
+         AND is_from_me = 0
+         AND is_bot_message = 0
+         AND sender != ''
+       ORDER BY sender`,
+    )
+    .all(chatJid) as { sender: string }[];
+  return rows.map((row) => row.sender);
+}
+
 export function getLastBotMessageTimestamp(
   chatJid: string,
   botPrefix: string,

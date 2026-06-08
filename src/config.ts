@@ -19,6 +19,7 @@ export const ASSISTANT_HAS_OWN_NUMBER =
     envConfig.ASSISTANT_HAS_OWN_NUMBER) === 'true';
 export const POLL_INTERVAL = 2000;
 export const SCHEDULER_POLL_INTERVAL = 60000;
+export const AUTO_REGISTER_SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 // Absolute paths needed for container mounts
 const PROJECT_ROOT = process.cwd();
