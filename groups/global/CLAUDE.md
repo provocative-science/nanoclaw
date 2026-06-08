@@ -206,6 +206,55 @@ Alloy forwards OTLP **traces** to the cloud stack. **Do not assume rich traces:*
 
 In conversation, people often say “the **Prometheus** / **Loki** / **Tempo** database.” In Grafana Cloud, the implementation may be **Mimir** behind the Prometheus-compatible API—functionally the same for Explore and most tools. When the Grafana MCP runs queries, it is going through **Grafana’s datasource APIs**, not raw SQL.
 
+### Pirateship Postgres (`50-ton-dac`) — Grafana MCP
+
+**Pirateship** (legacy **`co2ntrol`**) telemetry lives in a **Postgres** database exposed in Grafana as datasource **`50-ton-dac`** (uid **`aeq1t08uzwidcf`**, id **15** on our stack). This is **not** the containerized system: do **not** answer Pirateship / “pirateship run” questions from **`liquefaction_*`** Prometheus metrics or **`grafanacloud-prom`** — those come from the **liquefaction PLC / co3ntrol-rs** path.
+
+The Grafana MCP has **`query_prometheus`**, **`query_loki`**, etc., but **no dedicated Postgres SQL tool** yet. To query Pirateship Postgres, use **`mcp__grafana__grafana_api_request`**:
+
+```
+POST /api/ds/query
+```
+
+Example body (adjust SQL and time window):
+
+```json
+{
+  "queries": [{
+    "datasourceId": 15,
+    "rawSql": "SELECT timestamp AT TIME ZONE 'America/New_York' AS time_et, contactor, flowmeter_co2, product_gps, rolling_product_ppm FROM system_summary WHERE timestamp >= NOW() - INTERVAL '24 hours' ORDER BY timestamp DESC LIMIT 20",
+    "format": "table",
+    "refId": "A"
+  }],
+  "from": "now-24h",
+  "to": "now"
+}
+```
+
+**Do not** call `/api/datasources/proxy/uid/aeq1t08uzwidcf/api/v1/query_range` (or other Prometheus-shaped proxy paths) on this datasource — that returns errors (e.g. 502). Use **`/api/ds/query`** with **`rawSql`**.
+
+Confirm the datasource still exists with **`mcp__grafana__list_datasources`** (name **`50-ton-dac`**, type **`grafana-postgresql-datasource`**) before assuming id **15**; re-resolve id if the stack was reconfigured.
+
+#### Key tables
+
+| Table | Use |
+|-------|-----|
+| **`system_summary`** | High-frequency adsorption telemetry (~4 contactors). **`flowmeter_co2`**, **`inlet_co2`**, **`outlet_co2`**, **`product_gps`**, **`rolling_product_ppm`**, **`ads_gps`**, **`cumul_ads_gps`**, valve/energy columns. Best source for “is the rig running today?” |
+| **`desorb_summary`** | Desorb / product-extraction cycles. **`desorb_no`**, **`product_gps`**, **`cumul_product_gps`**, **`cycle_start_time`**. **May have no rows for a given day** if no desorb ran — empty result ≠ query failure |
+| **`gui_status`** | JSON **`log`** blobs from the GUI |
+| **`system_status`** | System status snapshots |
+| **`monitoring_temp`** | Temperature monitoring |
+
+Use **`information_schema.tables`** / **`information_schema.columns`** via the same **`/api/ds/query`** pattern to explore schema.
+
+#### Interpreting “today’s run”
+
+- **`product_gps = 0`** and **`rolling_product_ppm = 0`** with steady **`flowmeter_co2`** often means **adsorption-only** (air flowing, no product desorb).
+- Check **`desorb_summary`** for the latest cycle; if the last row is weeks/months old, say so explicitly.
+- Timestamps in DB are typically **UTC**; use **`AT TIME ZONE 'America/New_York'`** for ET when reporting to the team.
+
+If **`/api/ds/query`** returns **200** with empty frames, the datasource is working — report “no data in range” rather than “can’t access Postgres.”
+
 ### Ops pointers (not secrets)
 
 - **Alloy UI / livedebugging:** default local compose exposes **`http://localhost:12345`** (`alloy/docker-compose.yml`).
