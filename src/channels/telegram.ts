@@ -104,6 +104,16 @@ export class TelegramChannel implements Channel {
       const msgId = ctx.message.message_id.toString();
       const threadId = ctx.message.message_thread_id;
 
+      const replyTo = ctx.message.reply_to_message;
+      const replyToMessageId = replyTo?.message_id?.toString();
+      const replyToContent = replyTo?.text || replyTo?.caption;
+      const replyToSenderName = replyTo
+        ? replyTo.from?.first_name ||
+          replyTo.from?.username ||
+          replyTo.from?.id?.toString() ||
+          'Unknown'
+        : undefined;
+
       // Determine chat name
       const chatName =
         ctx.chat.type === 'private'
@@ -174,6 +184,9 @@ export class TelegramChannel implements Channel {
         timestamp,
         is_from_me: false,
         thread_id: threadId ? threadId.toString() : undefined,
+        reply_to_message_id: replyToMessageId,
+        reply_to_message_content: replyToContent,
+        reply_to_sender_name: replyToSenderName,
       });
 
       logger.info(

@@ -110,6 +110,7 @@ function createTextCtx(overrides: {
   date?: number;
   entities?: any[];
   messageThreadId?: number;
+  reply_to_message?: any;
 }) {
   const chatId = overrides.chatId ?? 100200300;
   const chatType = overrides.chatType ?? 'group';
@@ -121,6 +122,9 @@ function createTextCtx(overrides: {
   };
   if (overrides.messageThreadId !== undefined) {
     msg.message_thread_id = overrides.messageThreadId;
+  }
+  if (overrides.reply_to_message !== undefined) {
+    msg.reply_to_message = overrides.reply_to_message;
   }
   return {
     chat: {
@@ -305,6 +309,55 @@ describe('TelegramChannel', () => {
         expect.objectContaining({
           content: 'Topic message',
           thread_id: '55',
+        }),
+      );
+    });
+
+    it('extracts reply_to fields when replying to a text message', async () => {
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const ctx = createTextCtx({
+        text: 'Yes, on my way!',
+        reply_to_message: {
+          message_id: 42,
+          text: 'Are you coming tonight?',
+          from: { id: 777, first_name: 'Bob', username: 'bob_user' },
+        },
+      });
+      await triggerTextMessage(ctx);
+
+      expect(opts.onMessage).toHaveBeenCalledWith(
+        'tg:100200300',
+        expect.objectContaining({
+          content: 'Yes, on my way!',
+          reply_to_message_id: '42',
+          reply_to_message_content: 'Are you coming tonight?',
+          reply_to_sender_name: 'Bob',
+        }),
+      );
+    });
+
+    it('uses caption when reply has no text (media reply)', async () => {
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const ctx = createTextCtx({
+        text: 'Nice photo!',
+        reply_to_message: {
+          message_id: 50,
+          caption: 'Check this out',
+          from: { id: 888, first_name: 'Carol' },
+        },
+      });
+      await triggerTextMessage(ctx);
+
+      expect(opts.onMessage).toHaveBeenCalledWith(
+        'tg:100200300',
+        expect.objectContaining({
+          reply_to_message_content: 'Check this out',
         }),
       );
     });
