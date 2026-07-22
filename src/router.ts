@@ -11,17 +11,35 @@ export function escapeXml(s: string): string {
 }
 
 /**
- * Forum / topic routing for outbound replies: walk the prompt batch from newest
- * to oldest and use the first non-empty thread_id. Ignores trailing messages with
- * no thread (e.g. General) so a topic reply is not overridden by newer chit-chat.
+ * Forum / topic routing for outbound replies.
+ *
+ * Prefer an explicit anchor (e.g. model-escalate message), else the newest
+ * trigger match, else the newest message. Use that message's thread_id as-is —
+ * including absent/empty for Telegram General (Bot API omits message_thread_id).
+ *
+ * Do not scan older messages for a non-empty thread_id: a General trigger would
+ * otherwise inherit a stale topic from earlier in the batch.
  */
 export function replyThreadIdFromBatch(
   messages: NewMessage[],
+  options?: {
+    anchor?: NewMessage;
+    triggerPattern?: RegExp;
+  },
 ): string | undefined {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const t = messages[i].thread_id;
-    if (t != null && t !== '') return t;
+  let anchor = options?.anchor;
+  if (!anchor && options?.triggerPattern) {
+    const pattern = options.triggerPattern;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (pattern.test((messages[i].content || '').trim())) {
+        anchor = messages[i];
+        break;
+      }
+    }
   }
+  anchor ??= messages[messages.length - 1];
+  const t = anchor?.thread_id;
+  if (t != null && t !== '') return t;
   return undefined;
 }
 

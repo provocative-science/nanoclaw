@@ -9,6 +9,7 @@ import {
   escapeXml,
   formatMessages,
   formatOutbound,
+  replyThreadIdFromBatch,
   stripInternalTags,
 } from './router.js';
 import { NewMessage } from './types.js';
@@ -180,6 +181,65 @@ describe('formatMessages', () => {
     expect(result).toContain('1:30');
     expect(result).toContain('PM');
     expect(result).toContain('<context timezone="America/New_York" />');
+  });
+});
+
+// --- replyThreadIdFromBatch ---
+
+describe('replyThreadIdFromBatch', () => {
+  const trigger = /^@Ghost\b/i;
+
+  it('keeps General (null thread) when older batch msgs have topics', () => {
+    const anchor = makeMsg({
+      id: 'anne',
+      content: '@Ghost /qwen tell me about yourself',
+      thread_id: undefined,
+    });
+    const batch = [
+      makeMsg({ id: 'old', content: 'earlier topic chatter', thread_id: '16250' }),
+      makeMsg({ id: 'mid', content: 'general chatter', thread_id: undefined }),
+      anchor,
+    ];
+    expect(
+      replyThreadIdFromBatch(batch, { anchor, triggerPattern: trigger }),
+    ).toBeUndefined();
+  });
+
+  it('uses the trigger message topic, not a newer General message', () => {
+    const batch = [
+      makeMsg({
+        id: 'trigger',
+        content: '@Ghost what is the status?',
+        thread_id: '16946',
+      }),
+      makeMsg({ id: 'later', content: 'nice', thread_id: undefined }),
+    ];
+    expect(replyThreadIdFromBatch(batch, { triggerPattern: trigger })).toBe(
+      '16946',
+    );
+  });
+
+  it('uses explicit escalate anchor over other trigger matches', () => {
+    const escalate = makeMsg({
+      id: 'esc',
+      content: '@Ghost /qwen hi',
+      thread_id: '55',
+    });
+    const batch = [
+      makeMsg({ id: 'other', content: '@Ghost earlier', thread_id: '99' }),
+      escalate,
+    ];
+    expect(
+      replyThreadIdFromBatch(batch, { anchor: escalate, triggerPattern: trigger }),
+    ).toBe('55');
+  });
+
+  it('falls back to newest message when no trigger/anchor', () => {
+    const batch = [
+      makeMsg({ id: 'a', content: 'old', thread_id: '1' }),
+      makeMsg({ id: 'b', content: 'new', thread_id: '2' }),
+    ];
+    expect(replyThreadIdFromBatch(batch)).toBe('2');
   });
 });
 
