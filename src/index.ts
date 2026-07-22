@@ -126,7 +126,10 @@ async function handlePlantAlertMuteCommand(
   try {
     await channel.sendMessage(chatJid, text, replyThreadId);
   } catch (err) {
-    logger.warn({ err, chatJid, command }, 'Failed to send plant-alert mute ack');
+    logger.warn(
+      { err, chatJid, command },
+      'Failed to send plant-alert mute ack',
+    );
   }
 
   lastAgentTimestamp[chatJid] = messages[messages.length - 1].timestamp;
@@ -352,10 +355,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
           replyThreadIdEsc,
         );
       } catch (err) {
-        logger.warn(
-          { err, chatJid },
-          'Failed to send invalid model ack',
-        );
+        logger.warn({ err, chatJid }, 'Failed to send invalid model ack');
       }
       lastAgentTimestamp[chatJid] =
         missedMessages[missedMessages.length - 1].timestamp;
@@ -654,7 +654,9 @@ async function startMessageLoop(): Promise<void> {
           const messagesToSend =
             allPending.length > 0 ? allPending : groupMessages;
 
-          if (await handlePlantAlertMuteCommand(chatJid, messagesToSend, channel)) {
+          if (
+            await handlePlantAlertMuteCommand(chatJid, messagesToSend, channel)
+          ) {
             continue;
           }
 

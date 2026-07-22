@@ -194,10 +194,15 @@ async function runTask(
       let prompt = task.prompt;
 
       if (task.script) {
-        logger.info({ taskId: task.id }, 'Running task script on host (light path)');
+        logger.info(
+          { taskId: task.id },
+          'Running task script on host (light path)',
+        );
         const scriptResult = await runTaskScript(task.script);
         if (!scriptResult || !scriptResult.wakeAgent) {
-          const reason = scriptResult ? 'wakeAgent=false' : 'script error/no output';
+          const reason = scriptResult
+            ? 'wakeAgent=false'
+            : 'script error/no output';
           logger.info(
             { taskId: task.id, reason },
             'Light-path script decided not to wake agent',

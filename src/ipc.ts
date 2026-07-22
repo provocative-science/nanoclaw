@@ -374,7 +374,11 @@ export async function processTaskIpc(
             : null;
 
         let model: string | null = null;
-        if (data.model !== undefined && data.model !== null && String(data.model).trim() !== '') {
+        if (
+          data.model !== undefined &&
+          data.model !== null &&
+          String(data.model).trim() !== ''
+        ) {
           const normalized = normalizeModel(String(data.model));
           if (!normalized) {
             logger.warn(

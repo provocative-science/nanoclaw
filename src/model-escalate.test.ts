@@ -31,9 +31,10 @@ describe('parseModelEscalate', () => {
   });
 
   it('parses /haiku and /sonnet and /qwen', () => {
-    expect(parseModelEscalate('/haiku say hi')?.ok && (parseModelEscalate('/haiku say hi') as { model: string }).model).toBe(
-      'claude-haiku-4-5',
-    );
+    expect(
+      parseModelEscalate('/haiku say hi')?.ok &&
+        (parseModelEscalate('/haiku say hi') as { model: string }).model,
+    ).toBe('claude-haiku-4-5');
     expect(parseModelEscalate('/sonnet plot dewpoint')).toMatchObject({
       ok: true,
       model: 'claude-sonnet-4-6',

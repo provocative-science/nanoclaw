@@ -8,13 +8,16 @@ import {
 
 describe('completeChatCompletion', () => {
   it('returns choices[0].message.content', async () => {
-    const fetchImpl = vi.fn(async () =>
-      new Response(
-        JSON.stringify({
-          choices: [{ message: { role: 'assistant', content: 'hello from qwen' } }],
-        }),
-        { status: 200, headers: { 'Content-Type': 'application/json' } },
-      ),
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            choices: [
+              { message: { role: 'assistant', content: 'hello from qwen' } },
+            ],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
     );
 
     const text = await completeChatCompletion({
@@ -36,13 +39,14 @@ describe('completeChatCompletion', () => {
   });
 
   it('strips trailing slash on baseUrl', async () => {
-    const fetchImpl = vi.fn(async () =>
-      new Response(
-        JSON.stringify({
-          choices: [{ message: { content: 'ok' } }],
-        }),
-        { status: 200 },
-      ),
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            choices: [{ message: { content: 'ok' } }],
+          }),
+          { status: 200 },
+        ),
     );
 
     await completeChatCompletion({
@@ -58,9 +62,7 @@ describe('completeChatCompletion', () => {
   });
 
   it('throws on HTTP error', async () => {
-    const fetchImpl = vi.fn(async () =>
-      new Response('nope', { status: 401 }),
-    );
+    const fetchImpl = vi.fn(async () => new Response('nope', { status: 401 }));
 
     await expect(
       completeChatCompletion({
@@ -74,8 +76,9 @@ describe('completeChatCompletion', () => {
   });
 
   it('throws when content missing', async () => {
-    const fetchImpl = vi.fn(async () =>
-      new Response(JSON.stringify({ choices: [] }), { status: 200 }),
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ choices: [] }), { status: 200 }),
     );
 
     await expect(

@@ -6,10 +6,7 @@
  *   model:opus …   model:claude-sonnet-4-6 …   model:qwen …
  */
 
-import {
-  modelAllowlistHint,
-  normalizeModel,
-} from './model.js';
+import { modelAllowlistHint, normalizeModel } from './model.js';
 import type { NewMessage } from './types.js';
 
 const MENTION_RE = /@\w[\w_]*/g;
@@ -31,9 +28,7 @@ export function parseModelEscalate(text: string): ModelEscalateResult {
   const trimmed = withoutMentions.replace(/^\s+/, '');
 
   // /opus | /haiku | /sonnet | /qwen at start
-  const slashMatch = trimmed.match(
-    /^\/(opus|haiku|sonnet|qwen)(?:\s+|$)/i,
-  );
+  const slashMatch = trimmed.match(/^\/(opus|haiku|sonnet|qwen)(?:\s+|$)/i);
   if (slashMatch) {
     const alias = slashMatch[1].toLowerCase();
     const model = normalizeModel(alias)!;

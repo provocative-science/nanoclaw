@@ -79,7 +79,11 @@ export async function completeChatCompletion(
     try {
       data = JSON.parse(text);
     } catch {
-      throw new OpenAICompatError('OpenAI-compat response is not JSON', res.status, text.slice(0, 500));
+      throw new OpenAICompatError(
+        'OpenAI-compat response is not JSON',
+        res.status,
+        text.slice(0, 500),
+      );
     }
 
     const content = extractContent(data);
