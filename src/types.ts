@@ -66,6 +66,10 @@ export interface ScheduledTask {
   schedule_type: 'cron' | 'interval' | 'once';
   schedule_value: string;
   context_mode: 'group' | 'isolated';
+  /** Telegram forum topic id (`message_thread_id`); null/undefined = chat default. */
+  thread_id?: string | null;
+  /** Optional allowlisted model alias or full ID; null = host default. */
+  model?: string | null;
   next_run: string | null;
   last_run: string | null;
   last_result: string | null;

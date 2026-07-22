@@ -10,6 +10,7 @@ import { AvailableGroup } from './container-runner.js';
 import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
+import { modelAllowlistHint, normalizeModel } from './model.js';
 import { stripInternalTags } from './router.js';
 import { RegisteredGroup } from './types.js';
 import { resolveContainerWorkspacePathToHost } from './workspace-path.js';
@@ -271,6 +272,10 @@ export async function processTaskIpc(
     groupFolder?: string;
     chatJid?: string;
     targetJid?: string;
+    /** Telegram forum topic id for task replies / send_message. */
+    threadId?: string;
+    /** Optional model alias or full ID (allowlisted). */
+    model?: string;
     // For git_pull
     repo?: string;
     // For register_group
@@ -363,6 +368,28 @@ export async function processTaskIpc(
           data.context_mode === 'group' || data.context_mode === 'isolated'
             ? data.context_mode
             : 'isolated';
+        const threadId =
+          typeof data.threadId === 'string' && data.threadId.trim() !== ''
+            ? data.threadId.trim()
+            : null;
+
+        let model: string | null = null;
+        if (data.model !== undefined && data.model !== null && String(data.model).trim() !== '') {
+          const normalized = normalizeModel(String(data.model));
+          if (!normalized) {
+            logger.warn(
+              {
+                taskId,
+                model: data.model,
+                hint: modelAllowlistHint(),
+              },
+              'Invalid model on schedule_task; task not created',
+            );
+            break;
+          }
+          model = normalized;
+        }
+
         createTask({
           id: taskId,
           group_folder: targetFolder,
@@ -372,12 +399,14 @@ export async function processTaskIpc(
           schedule_type: scheduleType,
           schedule_value: data.schedule_value,
           context_mode: contextMode,
+          thread_id: threadId,
+          model,
           next_run: nextRun,
           status: 'active',
           created_at: new Date().toISOString(),
         });
         logger.info(
-          { taskId, sourceGroup, targetFolder, contextMode },
+          { taskId, sourceGroup, targetFolder, contextMode, threadId, model },
           'Task created via IPC',
         );
         deps.onTasksChanged();
@@ -469,6 +498,25 @@ export async function processTaskIpc(
             | 'once';
         if (data.schedule_value !== undefined)
           updates.schedule_value = data.schedule_value;
+        if (data.model !== undefined) {
+          if (data.model === null || String(data.model).trim() === '') {
+            updates.model = null;
+          } else {
+            const normalized = normalizeModel(String(data.model));
+            if (!normalized) {
+              logger.warn(
+                {
+                  taskId: data.taskId,
+                  model: data.model,
+                  hint: modelAllowlistHint(),
+                },
+                'Invalid model on update_task; update skipped',
+              );
+              break;
+            }
+            updates.model = normalized;
+          }
+        }
 
         // Recompute next_run if schedule changed
         if (data.schedule_type || data.schedule_value) {

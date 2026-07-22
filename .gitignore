@@ -24,6 +24,8 @@ groups/global/*
 
 # Temp files
 .tmp-*
+**/__pycache__/
+*.pyc
 
 # OS
 .DS_Store
@@ -38,3 +40,5 @@ groups/global/*
 agents-sdk-docs
 codebase/
 secrets/mcp.env
+secrets/alert-monitor.env
+secrets/qwen.env

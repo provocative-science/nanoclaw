@@ -45,6 +45,8 @@ export interface ContainerInput {
   script?: string;
   /** Telegram forum topic id for mcp__nanoclaw__send_message (matches host outbound routing). */
   replyThreadId?: string;
+  /** Concrete Anthropic model ID (host-normalized / allowlisted). */
+  model?: string;
 }
 
 export interface ContainerOutput {

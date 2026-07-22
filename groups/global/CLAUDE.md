@@ -59,11 +59,31 @@ System-wide knowledge lives in **`/workspace/shared/`** — mounted read-write i
 
 - `notes.md` — safety reminders, business targets, Notion page/database IDs, operational events
 - `confluence-knowledge.md` — Confluence space summaries (when present)
+- `liquefaction-system.md` — process flow, chillers, V25 dewpoint vent, liquid routing, HAZOP bits, Modbus surfaces
 - `roadmap.md`, `contracts.md`, `liquefaction-calibration.md` — project context (when present)
+- **`plant-alerts/`** — shared plant alert archive (see below)
 
 When you learn something that applies to **all** chat sessions (not just this group), create or update files under **`/workspace/shared/`**. Keep group-specific context in **`/workspace/group/`**.
 
 Only the **main channel** should edit **`/workspace/global/CLAUDE.md`** (core instructions). Everyone can maintain shared notes in `/workspace/shared/`.
+
+### Plant alerts (follow-ups from any chat)
+
+Automated plant alerts post to the Carbon Capture Telegram group, but the **event + Ghost operator brief** are also archived under **`/workspace/shared/plant-alerts/`** so you can answer follow-ups in DMs or any other thread:
+
+| Path | Contents |
+|------|----------|
+| `plant-alerts/latest.md` | Most recent alert metadata + operator brief (when Ghost has finished) |
+| `plant-alerts/latest-event.json` | Compact host-monitor snapshot for the latest edge |
+| `plant-alerts/log.jsonl` | Recent history (host events + Ghost brief lines); newest at end |
+
+When the user asks about a plant warning, tower light, lock, interlock, or “that alert”:
+
+1. Read `plant-alerts/latest.md` first.
+2. If they mean an older event, scan the tail of `log.jsonl`.
+3. Use Grafana MCP to refresh live telemetry if the brief is stale.
+
+Do **not** assume the current chat’s Claude session transcript contains the alert — only Carbon Capture’s session does. Prefer the shared archive.
 
 ### Notion MCP
 
@@ -139,76 +159,111 @@ Results are written to `/workspace/ipc/input/git_pull_result_*.json`. Wait a few
 
 `repo` must match a **directory name** under `codebase/` on the host. Expected checkouts: `co3ntrol-rs`, `co3ntrol-gui`, `high-pressure-co2-plc`, `backplane-firmware`, `riser-firmware`, `co2ntrol` (legacy).
 
-## Observability stack — OTLP, Alloy, Grafana Cloud
+## Coupled plant — feed path (liquefaction ↔ container)
 
-When you use Grafana (Explore, dashboards, or the Grafana MCP) against **Prometheus-style metrics**, **Loki logs**, and **Tempo traces** for the high-pressure CO₂ control plane, telemetry is produced by **`co3ntrol-rs`** (the Rust API). The stack below is what you are querying.
+Liquefaction and the container (BOP/DAC) pod are a **coupled feed path**: container/BOP produces CO₂ → accumulator → liquefaction column.
 
-### Mental model: three backends, one pipeline
+When diagnosing a liquefaction symptom (tower light, HAZOP bit, low column pressure, etc.), always glance **upstream** at container/accumulator feed before concluding the fault is local — e.g. is accumulator pressure high enough to feed the column (rule of thumb ~>100 psi when that applies)? If the accumulator is low, is the container pod unhealthy / locked / not producing, or still starting up and building pressure?
 
-Grafana does **not** store raw telemetry itself. It **queries backends** that behave like three different “databases”:
+When diagnosing a **container** lock or interlock, stay mostly on the container/BOP side. Do not routinely pull liquefaction as an explanation for container supervisor events — liquefaction does not cause upstream container faults.
 
-| Backend (Grafana datasource type) | What it holds | How our data gets there |
-|-------------------------------------|----------------|-------------------------|
-| **Prometheus / Mimir** | Time-series **metrics** (numeric samples over time) | **co3ntrol-rs** exports OTel **metrics** over OTLP/HTTP → **Grafana Alloy** converts and forwards to Grafana Cloud **metrics** endpoints (Mimir-compatible). |
-| **Loki** | **Logs** (timestamped text / structured log lines) | **co3ntrol-rs** bridges `tracing` events to OTel **logs** → Alloy → Loki push API. |
-| **Tempo** | **Distributed traces** (spans, parent/child relationships, latency) | Alloy receives OTLP **traces** and forwards to Grafana Cloud **traces**. The Rust service’s trace pipeline is wired; **spans may be sparse or absent** until instrumentation expands—metrics and logs are the main signal today. |
+Plant alert pages are also injected by the host monitor under `scripts/alert-monitor/` (see that package and `deploy/GRAFANA_ONCALL.md` for OnCall rules).
 
-**Alloy** is the **collector** that runs beside (or near) **co3ntrol-rs**: it listens for **OTLP** and ships to Grafana Cloud using the official `grafana_cloud.stack` module so region-specific URLs are discovered at runtime (no hard-coded regional endpoints in repo config).
+## Observability stack — Alloy scrape, Grafana Cloud
 
-Pipeline (simplified):
+When you use Grafana (Explore, dashboards, or the Grafana MCP) against **Prometheus-style metrics** and **Loki logs** for the high-pressure CO₂ control plane, telemetry is produced by **`co3ntrol-rs`** (the Rust API) and collected by **Grafana Alloy** on each node. The stack below is what you are querying.
+
+> **Critical (2026-07):** Production nodes use a **pull/scrape** pipeline, **not** the old OTLP push path. Metric names are **`co3ntrol_*`**, and node identity is **`subsystem`** / **`facility`** / **`system_id`** labels stamped by Alloy — **not** `host_name`, `service.name`, or bare `liquefaction_*` names. Queries using the old schema return empty and look like an outage even when telemetry is healthy.
+
+### Mental model: backends and the current pipeline
+
+Grafana does **not** store raw telemetry itself. It **queries backends**:
+
+| Backend (Grafana datasource type) | What it holds | How our data gets there (current) |
+|-------------------------------------|----------------|-----------------------------------|
+| **Prometheus / Mimir** | Time-series **metrics** | **co3ntrol-rs** serves `GET /metrics` (Bearer auth) on loopback → **Alloy** scrapes → `remote_write` to Grafana Cloud Mimir. |
+| **Loki** | **Logs** | On some nodes Alloy tails log **files** (e.g. PLC console on lichost) → Loki push. co3ntrol-rs also writes JSONL locally at `/var/log/co3ntrol/control-telemetry.log` (not always in Loki). |
+| **Tempo** | **Traces** | Not a primary signal today; prefer **metrics + logs** for incident analysis. |
+
+Pipeline (current, simplified):
 
 ```
-co3ntrol-rs (Rust) ──OTLP/HTTP :4318──► Grafana Alloy ──► Grafana Cloud metrics (Mimir)
-        │                                        └──► Loki
-        │                                        └──► Tempo
-        └── default base URL: http://localhost:4318
-            (override with OTEL_EXPORTER_OTLP_* env vars if Alloy is remote)
+co3ntrol-rs ──(GET /metrics, Bearer auth, ~1 Hz)──► Alloy (systemd, same host)
+   127.0.0.1:3000         passive snapshot              scrape + external_labels
+                                                              │
+                                                              ▼
+                                                    Grafana Cloud Mimir
+                                                    (datasource: grafanacloud-prom)
 ```
 
-Reference in **co3ntrol-rs**: `alloy/README.md`, `alloy/config.alloy`, and the Rust OTel integration (crate paths such as `control/src/otel/` may still apply—confirm in the tree you pulled).
+Reference in **co3ntrol-rs**: `ALLOY_README.md`, `alloy/config.alloy.example`, `control/src/api/metrics.rs`.
 
-### What co3ntrol-rs emits (so you filter the right thing)
+### Grafana MCP — which datasource and labels
 
-#### Service identity (use these in Grafana / PromQL / LogQL)
+- **Stack URL:** `https://provocativerob.grafana.net` (configured in `groups/global/.mcp.json`).
+- **Prometheus/Mimir datasource:** **`grafanacloud-provocativerob-prom`** (uid **`grafanacloud-prom`**). Use **`query_prometheus`** (or Explore) against this datasource for liquefaction, airbed, and container/BOP telemetry.
+- **Node identity labels** (from Alloy `external_labels`, on every scraped series):
+  - **`subsystem`** — primary filter. Production values include **`liquefaction`** (lichost), **`airbed`** (pirate-host), **`container`** (bop-host).
+  - **`facility`**, **`system_id`** — site/system identifiers; use alongside `subsystem` when disambiguating.
+- **Do not filter on `host_name` or `service.name`** for current co3ntrol-rs metrics — those belonged to the **deprecated OTLP** pipeline.
 
-- **Implementation** — **co3ntrol-rs** defines resource attributes at runtime.
-- **`service.name`** — often defaults to **`co3ntrol`** for continuity with existing dashboards (override with `OTEL_SERVICE_NAME`). Primary filter when multiple services hit the same stack.
-- **`service.instance.id`** — UUID per **process**; distinguishes concurrent or restarted instances.
-- **`service.version`** — Cargo package version (release cadence).
-- **`vcs.ref.head.revision`** — short git SHA baked at build time; use for “exact binary build”, not semver alone.
-- **`host.name`**, **`host.arch`**, **`os.type`** — where the binary ran.
-- **`deployment.environment`** — from `DEPLOYMENT_ENVIRONMENT`, default **`dev`**; expect **`prod`** on production hosts.
+### Metric naming (PromQL)
 
-`OTEL_RESOURCE_ATTRIBUTES` can add more resource labels (see OTel docs); a few keys may interact with the SDK—see the OTel module in **co3ntrol-rs**.
+- **Prefix:** all current metrics start with **`co3ntrol_`**.
+- **Shape:** JSON telemetry path flattened into the name; `app` / `system` segments are elided. Example liquefaction sensor: `co3ntrol_liquefaction_sensors_pre_haskell_dewpoint_c`.
+- **Collections:** DAC/filter instance ids become **labels** (`co3ntrol_dac_sensors_fan_power{dac="d1"}`), not extra name segments.
+- **Runtime / liveness gauges** (every node): `co3ntrol_timestamp_us`, `co3ntrol_ticktime_us`, `co3ntrol_systick`.
 
-#### Metrics (Prometheus / Mimir)
+#### Example queries (copy these patterns)
 
-- **Export interval:** ~**1 s**, aligned with the control loop.
-- **Shape:** essentially every numeric or boolean **leaf** of the live telemetry snapshot (`TimestampedApp` / JSON mirror of the telemetry model in **co3ntrol-rs**) becomes an **OTel gauge** observation.
-- **Naming:** path-like names built from JSON keys, with **`app` / `system`** segments elided where redundant, and **`dacs` / `filters`** turning instance ids into **labels** (e.g. DAC index) rather than exploding the metric name. Details live in **co3ntrol-rs** (search `metrics.rs` under the OTel crate path).
-- **Instrument scope:** meter name is defined in that repo (historically **`co3ntrol`** — see `METER_NAME` in the OTel module).
+```promql
+# Liquefaction — is telemetry live?
+co3ntrol_timestamp_us{subsystem="liquefaction"}
+co3ntrol_liquefaction_sensors_accumulator_pressure_psi{subsystem="liquefaction"}
+co3ntrol_liquefaction_sensors_pre_haskell_dewpoint_c{subsystem="liquefaction"}
 
-When you “query Prometheus”, you are usually writing **PromQL** against metric names and labels derived from that tree—think **engineering telemetry** (pressures, temperatures, valve states, setpoints), not HTTP request rates unless we add those later.
+# Airbed
+co3ntrol_timestamp_us{subsystem="airbed"}
 
-#### Logs (Loki)
+# Container / BOP pod
+co3ntrol_timestamp_us{subsystem="container"}
+co3ntrol_bop_sensors_purge_pressure{subsystem="container"}
 
-- **Source:** Rust **`tracing`** events at **INFO and above**, bridged into OTel log records and batched out OTLP.
-- **Noise control:** logs from OTLP transport libraries themselves are filtered to avoid feedback loops (see the logs bridge in the **co3ntrol-rs** OTel code).
-- **Loki hints:** a processor adds attributes suited for Loki routing (`LokiHintProcessor`); treat log lines as **operational narrative** around the same process/instance labels as metrics.
+# Discover liquefaction series
+{__name__=~"co3ntrol_liquefaction.*", subsystem="liquefaction"}
+```
 
-**LogQL** in Explore: constrain by `service_name` / labels your stack maps from OTel resource attributes (exact label names in Loki may follow Grafana Cloud’s OTLP→Loki mapping—use label browser if unsure).
+#### Deprecated names — do not use for liveness checks
 
-#### Traces (Tempo)
+The following schema is **obsolete** (OTLP era; last meaningful data ~Jun 30 – early Jul 2026). Empty results here do **not** mean the plant is down:
 
-Alloy forwards OTLP **traces** to the cloud stack. **Do not assume rich traces:** the product may not yet emit dense spans everywhere. If Tempo queries return little, pivot to **metrics + logs** for incident analysis unless the user confirms trace instrumentation is active for the path they care about.
+```promql
+# WRONG — returns empty today
+liquefaction_sensors_pre_haskell_dewpoint_c{host_name="lichost"}
+liquefaction_sensors_accumulator_pressure_psi
+{service.name="co3ntrol", host.name="lichost"}
+```
+
+If a PromQL query returns no data, **retry with `co3ntrol_*` + `subsystem=`** before reporting a telemetry outage or blaming Alloy remote_write.
+
+### Logs (Loki)
+
+- **Do not assume** OTLP log export from co3ntrol-rs; the scrape pipeline does not carry tracing logs to Loki by default.
+- **lichost:** PLC firmware console may appear in Loki via Alloy file tail (`p1am-console.log`).
+- **Operational narrative:** check local JSONL (`control-telemetry.log`, `control-console.log`) on the host when Loki is sparse.
+- Use the Loki datasource via **`query_loki`**; label names vary by source — use the label browser if unsure.
 
 ### Grafana vs “the databases”
 
-In conversation, people often say “the **Prometheus** / **Loki** / **Tempo** database.” In Grafana Cloud, the implementation may be **Mimir** behind the Prometheus-compatible API—functionally the same for Explore and most tools. When the Grafana MCP runs queries, it is going through **Grafana’s datasource APIs**, not raw SQL.
+In conversation, people often say “the **Prometheus** / **Loki** / **Tempo** database.” In Grafana Cloud, metrics are **Mimir** behind a Prometheus-compatible API. When the Grafana MCP runs queries, it goes through **Grafana’s datasource APIs**, not raw SQL.
 
 ### Pirateship Postgres (`50-ton-dac`) — Grafana MCP
 
-**Pirateship** (legacy **`co2ntrol`**) telemetry lives in a **Postgres** database exposed in Grafana as datasource **`50-ton-dac`** (uid **`aeq1t08uzwidcf`**, id **15** on our stack). This is **not** the containerized system: do **not** answer Pirateship / “pirateship run” questions from **`liquefaction_*`** Prometheus metrics or **`grafanacloud-prom`** — those come from the **liquefaction PLC / co3ntrol-rs** path.
+**Pirateship** (legacy **`co2ntrol`**) telemetry lives in a **Postgres** database exposed in Grafana as datasource **`50-ton-dac`** (uid **`aeq1t08uzwidcf`**, id **15** on our stack). This is **not** liquefaction, airbed, or container co3ntrol-rs telemetry.
+
+- **Pirateship / 50-ton rig:** query **`50-ton-dac`** (Postgres), not **`grafanacloud-prom`**.
+- **Liquefaction / airbed / container:** query **`grafanacloud-prom`** with **`co3ntrol_*`** metrics and **`subsystem`** labels — not Pirateship Postgres.
+- **Old `liquefaction_*` Prometheus names** (without `co3ntrol_` prefix) are a **dead OTel schema**; they are unrelated to the Pirateship Postgres path.
 
 The Grafana MCP has **`query_prometheus`**, **`query_loki`**, etc., but **no dedicated Postgres SQL tool** yet. To query Pirateship Postgres, use **`mcp__grafana__grafana_api_request`**:
 
@@ -257,24 +312,28 @@ If **`/api/ds/query`** returns **200** with empty frames, the datasource is work
 
 ### Ops pointers (not secrets)
 
-- **Alloy UI / livedebugging:** default local compose exposes **`http://localhost:12345`** (`alloy/docker-compose.yml`).
-- **OTLP ports:** **4318** HTTP (what **co3ntrol-rs** uses by default), **4317** gRPC (also exposed for future/alternate clients).
-- **Alloy credentials:** `GRAFANA_CLOUD_TOKEN` + `GRAFANA_CLOUD_STACK_NAME` live in **`alloy/.env`** (not committed); token is a **Cloud access policy** with metrics/logs/traces write scopes as described in `alloy/README.md`.
+- **Alloy on production nodes:** native **`alloy.service`** (systemd), config **`/etc/alloy/config.alloy`**, secrets **`/etc/default/alloy`** (`CO3NTROL_TOKEN`, `GC_PROM_*`, `SUBSYSTEM`, etc.). See **`ALLOY_README.md`** in **co3ntrol-rs**.
+- **Alloy debug UI:** `http://<node-ip>:12345` — scrape target should be **UP**; `401` means bad `CO3NTROL_TOKEN`.
+- **co3ntrol-rs:** listens on **`127.0.0.1:3000`**; GUI on **`:3333`**.
 
-Never invent stack URLs or tokens; humans rotate credentials in Grafana / Alloy config.
+Never invent stack URLs or tokens; humans rotate credentials in Grafana / `/etc/default/alloy`.
 
 ### Practical tips for analysis tasks
 
-1. **Start from `service.name="co3ntrol"`** (or the overridden `OTEL_SERVICE_NAME`) and narrow by **`deployment.environment`** and **`host.name`**.
-2. **Correlate** an anomaly in metrics with logs in the same **`service.instance.id`** window (restart changes instance id).
-3. **Prefer `vcs.ref.head.revision`** when the user asks whether telemetry came from a **specific build**.
-4. If something is missing in **Tempo**, say so explicitly and fall back to **metrics + logs** rather than implying a tracing gap is a sampling bug without evidence.
+1. **Start from `subsystem="liquefaction"`** (or `airbed`, `container`) and metric prefix **`co3ntrol_`**.
+2. **Liveness:** `co3ntrol_timestamp_us{subsystem="..."}` updating + fresh values on a sensor gauge = pipeline healthy. Alert-style check: `time() * 1e6 - co3ntrol_timestamp_us > threshold`.
+3. **Before declaring an outage**, verify you are not using deprecated `liquefaction_*` / `host_name` / `service.name` filters.
+4. **Empty Prometheus result** with correct schema = “no samples in range” (or hardware nulls omitted), not necessarily Alloy failure.
+5. If **Tempo** has little data, say so and use **metrics + logs**.
 
-*Update this section if the pipeline or semantic conventions change (`alloy/` and the OTel Rust code in **co3ntrol-rs**).*
+*Update this section when the pipeline changes (`ALLOY_README.md`, `control/src/api/metrics.rs`).*
+
 
 ## Task Scripts
 
 For any recurring task, use `schedule_task`. Frequent agent invocations — especially multiple times a day — consume API credits and can risk account restrictions. If a simple check can determine whether action is needed, add a `script` — it runs first, and the agent is only called when the check passes. This keeps invocations to a minimum.
+
+Optional `model` on `schedule_task` / `update_task`: `sonnet` (default), `opus`, `haiku`, `qwen`, or full IDs (`claude-sonnet-4-6`, `qwen3.6-35b`, etc.). Use `haiku` for script-gated format-only wakes; keep plant investigation on `sonnet`. `qwen` is light-path only (no tools/MCP) — cheap format/Q&A, not plant alerts. In chat, escalate with `/opus`, `/haiku`, `/sonnet`, `/qwen`, or `model:<id>` at the start of a message (after the @trigger).
 
 ### How it works
 

@@ -636,6 +636,63 @@ describe('schedule_task context_mode', () => {
   });
 });
 
+describe('schedule_task model', () => {
+  it('stores normalized model alias', async () => {
+    await processTaskIpc(
+      {
+        type: 'schedule_task',
+        prompt: 'alert brief',
+        schedule_type: 'once',
+        schedule_value: '2025-06-01T00:00:00',
+        targetJid: 'other@g.us',
+        model: 'haiku',
+      },
+      'whatsapp_main',
+      true,
+      deps,
+    );
+
+    const tasks = getAllTasks();
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0].model).toBe('claude-haiku-4-5');
+  });
+
+  it('rejects invalid model and creates no task', async () => {
+    await processTaskIpc(
+      {
+        type: 'schedule_task',
+        prompt: 'alert brief',
+        schedule_type: 'once',
+        schedule_value: '2025-06-01T00:00:00',
+        targetJid: 'other@g.us',
+        model: 'gpt-4',
+      },
+      'whatsapp_main',
+      true,
+      deps,
+    );
+
+    expect(getAllTasks()).toHaveLength(0);
+  });
+
+  it('omitted model stays null (host default at run time)', async () => {
+    await processTaskIpc(
+      {
+        type: 'schedule_task',
+        prompt: 'alert brief',
+        schedule_type: 'once',
+        schedule_value: '2025-06-01T00:00:00',
+        targetJid: 'other@g.us',
+      },
+      'whatsapp_main',
+      true,
+      deps,
+    );
+
+    expect(getAllTasks()[0].model).toBeNull();
+  });
+});
+
 // --- register_group success path ---
 
 describe('register_group success', () => {

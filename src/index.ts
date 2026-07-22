@@ -72,6 +72,17 @@ import {
   shouldDropMessage,
 } from './sender-allowlist.js';
 import { startSchedulerLoop } from './task-scheduler.js';
+import {
+  findMuteCommandInMessages,
+  muteAckText,
+  writePlantAlertMuteState,
+} from './plant-alert-mute.js';
+import {
+  findModelEscalateInMessages,
+  invalidModelAckText,
+} from './model-escalate.js';
+import { resolveDefaultModel, isLightModel } from './model.js';
+import { runLightCompletion } from './light-llm.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
 
@@ -87,6 +98,51 @@ let messageLoopRunning = false;
 const channels: Channel[] = [];
 const queue = new GroupQueue();
 
+/**
+ * Host-side plant-alert mute/unmute (@Ghost mute alerts / unmute alerts).
+ * Writes data/alert-monitor/mute.json for the host monitor; skips the agent.
+ * Returns true if handled.
+ */
+async function handlePlantAlertMuteCommand(
+  chatJid: string,
+  messages: NewMessage[],
+  channel: Channel,
+): Promise<boolean> {
+  const found = findMuteCommandInMessages(messages);
+  if (!found) return false;
+
+  const { command, message } = found;
+  writePlantAlertMuteState(command, {
+    updatedBy: message.sender_name || message.sender,
+    chatJid,
+    threadId: message.thread_id,
+  });
+
+  const replyThreadId =
+    message.thread_id && message.thread_id !== ''
+      ? message.thread_id
+      : undefined;
+  const text = muteAckText(command);
+  try {
+    await channel.sendMessage(chatJid, text, replyThreadId);
+  } catch (err) {
+    logger.warn({ err, chatJid, command }, 'Failed to send plant-alert mute ack');
+  }
+
+  lastAgentTimestamp[chatJid] = messages[messages.length - 1].timestamp;
+  saveState();
+  logger.info(
+    {
+      chatJid,
+      command,
+      muted: command === 'mute',
+      by: message.sender_name || message.sender,
+      threadId: replyThreadId,
+    },
+    'Plant alerts mute command handled',
+  );
+  return true;
+}
 const onecli = new OneCLI({ url: ONECLI_URL });
 
 function ensureOneCLIAgent(jid: string, group: RegisteredGroup): void {
@@ -274,7 +330,48 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     if (!hasTrigger) return true;
   }
 
-  const prompt = formatMessages(missedMessages, TIMEZONE);
+  if (await handlePlantAlertMuteCommand(chatJid, missedMessages, channel)) {
+    return true;
+  }
+
+  // Model escalate: /opus, /haiku, /sonnet, or model:<id> on the latest message
+  let model = resolveDefaultModel();
+  let messagesForPrompt = missedMessages;
+  const escalate = findModelEscalateInMessages(missedMessages);
+  if (escalate) {
+    const replyThreadIdEsc =
+      escalate.message.thread_id && escalate.message.thread_id !== ''
+        ? escalate.message.thread_id
+        : undefined;
+
+    if (!escalate.result.ok) {
+      try {
+        await channel.sendMessage(
+          chatJid,
+          invalidModelAckText(escalate.result.raw, escalate.result.hint),
+          replyThreadIdEsc,
+        );
+      } catch (err) {
+        logger.warn(
+          { err, chatJid },
+          'Failed to send invalid model ack',
+        );
+      }
+      lastAgentTimestamp[chatJid] =
+        missedMessages[missedMessages.length - 1].timestamp;
+      saveState();
+      return true;
+    }
+
+    model = escalate.result.model;
+    const cleanedContent = escalate.result.cleanedContent;
+    messagesForPrompt = missedMessages.map((m) =>
+      m === escalate.message ? { ...m, content: cleanedContent } : m,
+    );
+    logger.info({ chatJid, model }, 'Model escalate for agent run');
+  }
+
+  const prompt = formatMessages(messagesForPrompt, TIMEZONE);
   const replyThreadId = replyThreadIdFromBatch(missedMessages);
 
   // Advance cursor so the piping path in startMessageLoop won't re-fetch
@@ -338,6 +435,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
         hadError = true;
       }
     },
+    model,
   );
 
   await channel.setTyping?.(chatJid, false);
@@ -372,9 +470,11 @@ async function runAgent(
   chatJid: string,
   replyThreadId: string | undefined,
   onOutput?: (output: ContainerOutput) => Promise<void>,
+  model?: string,
 ): Promise<'success' | 'error'> {
   const isMain = group.isMain === true;
   const sessionId = sessions[group.folder];
+  const resolvedModel = model ?? resolveDefaultModel();
 
   // Update tasks snapshot for container to read (filtered by group)
   const tasks = getAllTasks();
@@ -413,6 +513,34 @@ async function runAgent(
       }
     : undefined;
 
+  // Light-path models (e.g. qwen): host OpenAI-compat, no container/tools
+  if (isLightModel(resolvedModel)) {
+    try {
+      logger.info(
+        { group: group.name, model: resolvedModel },
+        'Running light-path model (no container)',
+      );
+      const text = await runLightCompletion(resolvedModel, prompt);
+      if (wrappedOnOutput) {
+        await wrappedOnOutput({ status: 'success', result: text });
+      }
+      return 'success';
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.error(
+        { group: group.name, model: resolvedModel, err },
+        'Light-path model error',
+      );
+      if (wrappedOnOutput) {
+        await wrappedOnOutput({
+          status: 'success',
+          result: `Light model error: ${msg}`,
+        });
+      }
+      return 'error';
+    }
+  }
+
   try {
     const output = await runContainerAgent(
       group,
@@ -424,6 +552,7 @@ async function runAgent(
         isMain,
         assistantName: ASSISTANT_NAME,
         replyThreadId,
+        model: resolvedModel,
       },
       (proc, containerName) =>
         queue.registerProcess(chatJid, proc, containerName, group.folder),
@@ -524,6 +653,11 @@ async function startMessageLoop(): Promise<void> {
           );
           const messagesToSend =
             allPending.length > 0 ? allPending : groupMessages;
+
+          if (await handlePlantAlertMuteCommand(chatJid, messagesToSend, channel)) {
+            continue;
+          }
+
           const formatted = formatMessages(messagesToSend, TIMEZONE);
 
           if (queue.sendMessage(chatJid, formatted)) {
@@ -755,6 +889,10 @@ async function main(): Promise<void> {
   startSchedulerLoop({
     registeredGroups: () => registeredGroups,
     getSessions: () => sessions,
+    setSession: (groupFolder, sessionId) => {
+      sessions[groupFolder] = sessionId;
+      setSession(groupFolder, sessionId);
+    },
     queue,
     onProcess: (groupJid, proc, containerName, groupFolder) =>
       queue.registerProcess(groupJid, proc, containerName, groupFolder),

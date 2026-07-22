@@ -30,6 +30,8 @@ interface ContainerInput {
   assistantName?: string;
   script?: string;
   replyThreadId?: string;
+  /** Concrete Anthropic model ID from host (already allowlisted). */
+  model?: string;
 }
 
 interface ContainerOutput {
@@ -473,6 +475,7 @@ async function runQuery(
       additionalDirectories: extraDirs.length > 0 ? extraDirs : undefined,
       resume: sessionId,
       resumeSessionAt: resumeAt,
+      ...(containerInput.model ? { model: containerInput.model } : {}),
       systemPrompt: globalClaudeMd
         ? { type: 'preset' as const, preset: 'claude_code' as const, append: globalClaudeMd }
         : undefined,
@@ -663,7 +666,7 @@ async function main(): Promise<void> {
   let resumeAt: string | undefined;
   try {
     while (true) {
-      log(`Starting query (session: ${sessionId || 'new'}, resumeAt: ${resumeAt || 'latest'})...`);
+      log(`Starting query (session: ${sessionId || 'new'}, resumeAt: ${resumeAt || 'latest'}, model: ${containerInput.model || 'default'})...`);
 
       const queryResult = await runQuery(prompt, sessionId, mcpServerPath, containerInput, sdkEnv, resumeAt);
       if (queryResult.newSessionId) {

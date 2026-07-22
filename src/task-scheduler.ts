@@ -18,7 +18,10 @@ import {
 } from './db.js';
 import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
+import { runLightCompletion } from './light-llm.js';
 import { logger } from './logger.js';
+import { isLightModel, normalizeModel, resolveDefaultModel } from './model.js';
+import { runTaskScript } from './task-script.js';
 import { RegisteredGroup, ScheduledTask } from './types.js';
 
 /**
@@ -65,6 +68,8 @@ export function computeNextRun(task: ScheduledTask): string | null {
 export interface SchedulerDependencies {
   registeredGroups: () => Record<string, RegisteredGroup>;
   getSessions: () => Record<string, string>;
+  /** Persist session id for group-context tasks so follow-ups resume the same thread. */
+  setSession: (groupFolder: string, sessionId: string) => void;
   queue: GroupQueue;
   onProcess: (
     groupJid: string,
@@ -150,10 +155,17 @@ async function runTask(
   let result: string | null = null;
   let error: string | null = null;
 
-  // For group context mode, use the group's current session
+  // For group context mode, use the group's current session so the task
+  // prompt + reply stay in the chat's Claude context for follow-ups.
   const sessions = deps.getSessions();
   const sessionId =
     task.context_mode === 'group' ? sessions[task.group_folder] : undefined;
+
+  const persistGroupSession = (newSessionId: string) => {
+    if (task.context_mode !== 'group') return;
+    sessions[task.group_folder] = newSessionId;
+    deps.setSession(task.group_folder, newSessionId);
+  };
 
   // After the task produces a result, close the container promptly.
   // Tasks are single-turn — no need to wait IDLE_TIMEOUT (30 min) for the
@@ -170,50 +182,114 @@ async function runTask(
   };
 
   try {
-    const output = await runContainerAgent(
-      group,
-      {
-        prompt: task.prompt,
-        sessionId,
-        groupFolder: task.group_folder,
-        chatJid: task.chat_jid,
-        isMain,
-        isScheduledTask: true,
-        assistantName: ASSISTANT_NAME,
-        script: task.script || undefined,
-      },
-      (proc, containerName) =>
-        deps.onProcess(task.chat_jid, proc, containerName, task.group_folder),
-      async (streamedOutput: ContainerOutput) => {
-        if (streamedOutput.result) {
-          result = streamedOutput.result;
-          // Forward result to user (sendMessage handles formatting)
-          await deps.sendMessage(task.chat_jid, streamedOutput.result);
-          scheduleClose();
-        }
-        if (streamedOutput.status === 'success') {
-          deps.queue.notifyIdle(task.chat_jid);
-          scheduleClose(); // Close promptly even when result is null (e.g. IPC-only tasks)
-        }
-        if (streamedOutput.status === 'error') {
-          error = streamedOutput.error || 'Unknown error';
-        }
-      },
-    );
+    const replyThreadId =
+      typeof task.thread_id === 'string' && task.thread_id.trim() !== ''
+        ? task.thread_id.trim()
+        : undefined;
 
-    if (closeTimer) clearTimeout(closeTimer);
+    const resolvedModel = normalizeModel(task.model) ?? resolveDefaultModel();
 
-    if (output.status === 'error') {
-      error = output.error || 'Unknown error';
-    } else if (output.result) {
-      // Result was already forwarded to the user via the streaming callback above
-      result = output.result;
+    // Light-path models: host OpenAI-compat (optional host script), no container
+    if (isLightModel(resolvedModel)) {
+      let prompt = task.prompt;
+
+      if (task.script) {
+        logger.info({ taskId: task.id }, 'Running task script on host (light path)');
+        const scriptResult = await runTaskScript(task.script);
+        if (!scriptResult || !scriptResult.wakeAgent) {
+          const reason = scriptResult ? 'wakeAgent=false' : 'script error/no output';
+          logger.info(
+            { taskId: task.id, reason },
+            'Light-path script decided not to wake agent',
+          );
+          logTaskRun({
+            task_id: task.id,
+            run_at: new Date().toISOString(),
+            duration_ms: Date.now() - startTime,
+            status: 'success',
+            result: null,
+            error: null,
+          });
+          const nextRun = computeNextRun(task);
+          updateTaskAfterRun(task.id, nextRun, `Skipped (${reason})`);
+          return;
+        }
+        prompt = `[SCHEDULED TASK]\n\nScript output:\n${JSON.stringify(scriptResult.data, null, 2)}\n\nInstructions:\n${task.prompt}`;
+      } else {
+        prompt = `[SCHEDULED TASK - The following message was sent automatically and is not coming directly from the user or group.]\n\n${task.prompt}`;
+      }
+
+      logger.info(
+        { taskId: task.id, model: resolvedModel },
+        'Running scheduled task on light path',
+      );
+      const text = await runLightCompletion(resolvedModel, prompt);
+      result = text;
+      await deps.sendMessage(task.chat_jid, text, replyThreadId);
+      deps.queue.notifyIdle(task.chat_jid);
+      logger.info(
+        { taskId: task.id, durationMs: Date.now() - startTime },
+        'Task completed (light path)',
+      );
+    } else {
+      const output = await runContainerAgent(
+        group,
+        {
+          prompt: task.prompt,
+          sessionId,
+          groupFolder: task.group_folder,
+          chatJid: task.chat_jid,
+          isMain,
+          isScheduledTask: true,
+          assistantName: ASSISTANT_NAME,
+          script: task.script || undefined,
+          replyThreadId,
+          model: resolvedModel,
+        },
+        (proc, containerName) =>
+          deps.onProcess(task.chat_jid, proc, containerName, task.group_folder),
+        async (streamedOutput: ContainerOutput) => {
+          if (streamedOutput.newSessionId) {
+            persistGroupSession(streamedOutput.newSessionId);
+          }
+          if (streamedOutput.result) {
+            result = streamedOutput.result;
+            // Forward result to user (sendMessage handles formatting)
+            await deps.sendMessage(
+              task.chat_jid,
+              streamedOutput.result,
+              replyThreadId,
+            );
+            scheduleClose();
+          }
+          if (streamedOutput.status === 'success') {
+            deps.queue.notifyIdle(task.chat_jid);
+            scheduleClose(); // Close promptly even when result is null (e.g. IPC-only tasks)
+          }
+          if (streamedOutput.status === 'error') {
+            error = streamedOutput.error || 'Unknown error';
+          }
+        },
+      );
+
+      if (closeTimer) clearTimeout(closeTimer);
+
+      if (output.newSessionId) {
+        persistGroupSession(output.newSessionId);
+      }
+
+      if (output.status === 'error') {
+        error = output.error || 'Unknown error';
+      } else if (output.result) {
+        // Result was already forwarded to the user via the streaming callback above
+        result = output.result;
+      }
+
+      logger.info(
+        { taskId: task.id, durationMs: Date.now() - startTime },
+        'Task completed',
+      );
     }
-
-    logger.info(
-      { taskId: task.id, durationMs: Date.now() - startTime },
-      'Task completed',
-    );
   } catch (err) {
     if (closeTimer) clearTimeout(closeTimer);
     error = err instanceof Error ? err.message : String(err);

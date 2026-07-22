@@ -275,6 +275,8 @@ The task will run in that group's context with access to their files and memory.
 
 For any recurring task, use `schedule_task`. Frequent agent invocations — especially multiple times a day — consume API credits and can risk account restrictions. If a simple check can determine whether action is needed, add a `script` — it runs first, and the agent is only called when the check passes. This keeps invocations to a minimum.
 
+Optional `model` on `schedule_task` / `update_task`: `sonnet` (default), `opus`, `haiku`, `qwen`, or full IDs (`claude-sonnet-4-6`, `qwen3.6-35b`, etc.). Use `haiku` for script-gated format-only wakes; keep plant investigation on `sonnet`. `qwen` is light-path only (no tools/MCP) — cheap format/Q&A, not plant alerts. In chat, escalate with `/opus`, `/haiku`, `/sonnet`, `/qwen`, or `model:<id>` at the start of a message.
+
 ### How it works
 
 1. You provide a bash `script` alongside the `prompt` when scheduling
