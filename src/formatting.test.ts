@@ -196,7 +196,11 @@ describe('replyThreadIdFromBatch', () => {
       thread_id: undefined,
     });
     const batch = [
-      makeMsg({ id: 'old', content: 'earlier topic chatter', thread_id: '16250' }),
+      makeMsg({
+        id: 'old',
+        content: 'earlier topic chatter',
+        thread_id: '16250',
+      }),
       makeMsg({ id: 'mid', content: 'general chatter', thread_id: undefined }),
       anchor,
     ];
@@ -230,7 +234,10 @@ describe('replyThreadIdFromBatch', () => {
       escalate,
     ];
     expect(
-      replyThreadIdFromBatch(batch, { anchor: escalate, triggerPattern: trigger }),
+      replyThreadIdFromBatch(batch, {
+        anchor: escalate,
+        triggerPattern: trigger,
+      }),
     ).toBe('55');
   });
 
