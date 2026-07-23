@@ -157,8 +157,8 @@ Requires `GRAFANA_URL` + `GRAFANA_SERVICE_ACCOUNT_TOKEN` (logs-capable SA;
 falls back to `secrets/mcp.env`) or `LOKI_URL` / `LOKI_USER` / `LOKI_TOKEN`.
 See `alert-monitor.env.example`.
 
-Grafana OnCall may still page on the same LogQL rule — that is a separate
-pager path. Mute Ghost with `mute alerts` does **not** mute OnCall.
+Grafana OnCall **also** pages on the same LogQL rule by design (pager +
+Ghost narrative). Mute Ghost with `mute alerts` does **not** mute OnCall.
 
 **Ghost mute:** Tag Ghost with `mute alerts` / `unmute alerts` in Telegram.
 NanoClaw writes `data/alert-monitor/mute.json`; the host monitor skips IPC
