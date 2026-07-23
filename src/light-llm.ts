@@ -30,7 +30,7 @@ export async function runLightCompletion(
   const profile = loadQwenProfile();
   if (!profile) {
     throw new Error(
-      'Qwen light path is not configured (missing QWEN_API_KEY in secrets/qwen.env)',
+      'Qwen light path is not configured (set QWEN_API_KEY in secrets/qwen.env, then restart nanoclaw)',
     );
   }
 

@@ -1,0 +1,15 @@
+{
+  "receiver": "Rob email",
+  "group_by": ["grafana_folder", "alertname"],
+  "routes": [
+    {
+      "receiver": "Spark Grandpre",
+      "object_matchers": [["team", "=", "plant"]],
+      "group_by": ["alertname", "subsystem"]
+    },
+    {
+      "receiver": "bobiverse",
+      "object_matchers": [["severity", "=", "critical"]]
+    }
+  ]
+}

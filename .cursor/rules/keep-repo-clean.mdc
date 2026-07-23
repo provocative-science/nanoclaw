@@ -1,0 +1,15 @@
+---
+description: Keep the nanoclaw git working tree clean after every update
+alwaysApply: true
+---
+
+# Keep the repo clean after every update
+
+After finishing implementation work in this project (features, fixes, docs, config):
+
+1. **Stage and commit** all intentional project changes unless the user said not to commit.
+2. **Push** to the tracked remote branch when the user asked to push, or when wrapping up a session they asked to keep clean/synced.
+3. **Do not leave** unrelated leftovers: untracked build artifacts, `__pycache__`, local secrets, or half-finished edits that belong in the same change.
+4. **Never commit secrets** (`secrets/*.env`, tokens, credentials). Commit `*.env.example` only.
+5. Prefer **one coherent commit** (or a small clear series) over a dirty tree at end of turn.
+6. After commit/push, verify with `git status` that the worktree is clean (or only has files the user explicitly wants local-only).

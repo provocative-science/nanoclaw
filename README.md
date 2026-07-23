@@ -26,6 +26,32 @@ This fork runs a Telegram-based AI assistant for the Provocative Science team. I
 - **Codebase Q&A** — The agent has read access to the cloned repos under `codebase/` (Rust API, GUI, PLC firmware, hardware firmware, and legacy reference) and can answer architecture, implementation, and usage questions via Telegram
 - **Telegram channels** — Bot: @provocative_ax_me_bot. Main private chat (no trigger word needed) and group chats (triggered by `@Ghost`)
 - **Container isolation** — Each group's agent runs in its own Docker container with read-only access to mounted codebases
+- **Model tiering** — Default is Claude Sonnet; escalate per message or pin a model on scheduled tasks (see below)
+
+### Model commands (Telegram)
+
+Default model is **Claude Sonnet 4.6**. Put a model directive at the **start** of the message (after `@Ghost` in groups):
+
+| Command | Model | Notes |
+|---------|--------|--------|
+| `/sonnet …` or `model:sonnet` | Claude Sonnet 4.6 | Default full agent (tools, MCP, sessions) |
+| `/opus …` or `model:opus` | Claude Opus 4.6 | Full agent — harder deep-dives |
+| `/haiku …` or `model:haiku` | Claude Haiku 4.5 | Full agent — cheaper/faster |
+| `/qwen …` or `model:qwen` | `qwen3.6-35b` | **Light path only** — no tools/MCP; host OpenAI-compatible API |
+
+Examples:
+
+```text
+@Ghost /opus why is column pressure low?
+@Ghost /qwen say hi
+@Ghost model:haiku summarize the last alert
+```
+
+Invalid `model:…` values get a short allowlist reply and do not run the agent.
+
+**Scheduled tasks:** optional `model` on `schedule_task` / `update_task` (`sonnet` \| `opus` \| `haiku` \| `qwen`, or full IDs). Plant alerts stay on `sonnet`. Use `qwen` only for format/Q&A-style wakes, not plant investigation.
+
+**Qwen setup (bob49):** copy `secrets/qwen.env.example` → `secrets/qwen.env`, set `QWEN_API_KEY` (from laptop `~/.config/dotfiles-autocommit.env`), then `systemctl --user restart nanoclaw`.
 
 ### Deploying to a New Machine
 

@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "grafana": {
+      "command": "bash",
+      "args": ["${workspaceFolder}/scripts/run-grafana-mcp.sh"]
+    }
+  }
+}

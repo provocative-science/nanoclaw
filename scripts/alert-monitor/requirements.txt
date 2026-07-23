@@ -1,0 +1,2 @@
+# Alert monitor — Python deps (stdlib + requests)
+requests>=2.28.0

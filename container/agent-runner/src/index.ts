@@ -19,6 +19,11 @@ import path from 'path';
 import { execFile } from 'child_process';
 import { query, HookCallback, PreCompactHookInput } from '@anthropic-ai/claude-agent-sdk';
 import { fileURLToPath } from 'url';
+import {
+  extractAssistantText,
+  resolveDeliverableResult,
+  stripInternalTags,
+} from './deliverable-result.js';
 
 interface ContainerInput {
   prompt: string;
@@ -440,6 +445,9 @@ async function runQuery(
 
   let newSessionId: string | undefined;
   let lastAssistantUuid: string | undefined;
+  /** Last assistant text with non-empty content after stripping <internal>. */
+  let lastDeliverableAssistantText: string | null = null;
+  const allowAssistantFallback = containerInput.isScheduledTask === true;
   let messageCount = 0;
   let resultCount = 0;
 
@@ -521,8 +529,16 @@ async function runQuery(
     const msgType = message.type === 'system' ? `system/${(message as { subtype?: string }).subtype}` : message.type;
     log(`[msg #${messageCount}] type=${msgType}`);
 
-    if (message.type === 'assistant' && 'uuid' in message) {
-      lastAssistantUuid = (message as { uuid: string }).uuid;
+    if (message.type === 'assistant') {
+      if ('uuid' in message) {
+        lastAssistantUuid = (message as { uuid: string }).uuid;
+      }
+      const assistantText = extractAssistantText(
+        message as { message?: { content?: unknown } },
+      );
+      if (assistantText && stripInternalTags(assistantText)) {
+        lastDeliverableAssistantText = assistantText;
+      }
     }
 
     if (message.type === 'system' && message.subtype === 'init') {
@@ -538,13 +554,44 @@ async function runQuery(
     if (message.type === 'result') {
       resultCount++;
       const textResult = 'result' in message ? (message as { result?: string }).result : null;
-      log(`Result #${resultCount}: subtype=${message.subtype}${textResult ? ` text=${textResult.slice(0, 200)}` : ''}`);
+      const deliverable = allowAssistantFallback
+        ? resolveDeliverableResult(textResult, lastDeliverableAssistantText)
+        : textResult || null;
+      if (
+        allowAssistantFallback &&
+        deliverable &&
+        (!textResult || !stripInternalTags(textResult)) &&
+        lastDeliverableAssistantText
+      ) {
+        log(
+          `Result #${resultCount}: empty SDK result; falling back to last assistant text (${deliverable.length} chars)`,
+        );
+      } else {
+        log(`Result #${resultCount}: subtype=${message.subtype}${deliverable ? ` text=${deliverable.slice(0, 200)}` : ''}`);
+      }
       writeOutput({
         status: 'success',
-        result: textResult || null,
+        result: deliverable,
         newSessionId
       });
     }
+  }
+
+  // Scheduled tasks: no SDK result message but we saw deliverable assistant
+  // text — emit it so Telegram delivery still works.
+  if (
+    allowAssistantFallback &&
+    resultCount === 0 &&
+    lastDeliverableAssistantText
+  ) {
+    log(
+      `No SDK result message; emitting last assistant text (${lastDeliverableAssistantText.length} chars)`,
+    );
+    writeOutput({
+      status: 'success',
+      result: lastDeliverableAssistantText,
+      newSessionId,
+    });
   }
 
   ipcPolling = false;

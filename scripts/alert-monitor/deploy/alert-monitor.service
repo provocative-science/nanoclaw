@@ -1,0 +1,19 @@
+[Unit]
+Description=NanoClaw plant alert monitor (liq tower/state ERROR + container lock/interlocks → Ghost IPC)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/provocative/nanoclaw/scripts/alert-monitor
+EnvironmentFile=-%h/provocative/nanoclaw/secrets/alert-monitor.env
+Environment=NANOCLAW_ROOT=%h/provocative/nanoclaw
+ExecStart=/usr/bin/python3 %h/provocative/nanoclaw/scripts/alert-monitor/monitor.py
+Restart=always
+RestartSec=5
+
+# Soft hardening
+NoNewPrivileges=true
+
+[Install]
+WantedBy=default.target

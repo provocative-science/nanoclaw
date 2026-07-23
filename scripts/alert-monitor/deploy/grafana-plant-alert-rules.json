@@ -1,0 +1,297 @@
+[
+  {
+    "uid": "plant-container-supervisor-lock",
+    "title": "container supervisor lock",
+    "folderUID": "f889bs",
+    "ruleGroup": "plant-co3ntrol",
+    "condition": "C",
+    "noDataState": "OK",
+    "execErrState": "Error",
+    "for": "2m",
+    "isPaused": false,
+    "labels": {
+      "team": "plant",
+      "severity": "critical",
+      "subsystem": "container"
+    },
+    "annotations": {
+      "summary": "Container/BOP supervisor lock is set",
+      "description": "app.supervisor.lock is true. Unforced commands are blocked until an operator clears the lock in the GUI (POST /supervisor/clear_lock). Ghost host monitor will narrate recovery/interlocks.",
+      "runbook_url": "https://github.com/provocative-science/nanoclaw/blob/main/scripts/alert-monitor/deploy/GRAFANA_ONCALL.md"
+    },
+    "data": [
+      {
+        "refId": "A",
+        "relativeTimeRange": { "from": 600, "to": 0 },
+        "datasourceUid": "grafanacloud-prom",
+        "model": {
+          "editorMode": "code",
+          "expr": "co3ntrol_supervisor_lock{subsystem=\"container\"} == 1",
+          "instant": true,
+          "intervalMs": 1000,
+          "maxDataPoints": 43200,
+          "range": false,
+          "refId": "A"
+        }
+      },
+      {
+        "refId": "C",
+        "relativeTimeRange": { "from": 0, "to": 0 },
+        "datasourceUid": "__expr__",
+        "model": {
+          "conditions": [
+            {
+              "evaluator": { "params": [0], "type": "gt" },
+              "operator": { "type": "and" },
+              "query": { "params": ["C"] },
+              "reducer": { "params": [], "type": "last" },
+              "type": "query"
+            }
+          ],
+          "datasource": { "type": "__expr__", "uid": "__expr__" },
+          "expression": "A",
+          "intervalMs": 1000,
+          "maxDataPoints": 43200,
+          "refId": "C",
+          "type": "threshold"
+        }
+      }
+    ]
+  },
+  {
+    "uid": "plant-container-interlock-only",
+    "title": "container interlock blocked (unlocked)",
+    "folderUID": "f889bs",
+    "ruleGroup": "plant-co3ntrol",
+    "condition": "C",
+    "noDataState": "OK",
+    "execErrState": "Error",
+    "for": "2m",
+    "isPaused": false,
+    "labels": {
+      "team": "plant",
+      "severity": "warning",
+      "subsystem": "container"
+    },
+    "annotations": {
+      "summary": "Container interlock blocked a command while unlocked",
+      "description": "triggered_interlocks fired within the last 2m and supervisor_lock is still 0. Does not page when already locked (avoids double-page with lock alert).",
+      "runbook_url": "https://github.com/provocative-science/nanoclaw/blob/main/scripts/alert-monitor/deploy/GRAFANA_ONCALL.md"
+    },
+    "data": [
+      {
+        "refId": "A",
+        "relativeTimeRange": { "from": 600, "to": 0 },
+        "datasourceUid": "grafanacloud-prom",
+        "model": {
+          "editorMode": "code",
+          "expr": "(max_over_time(co3ntrol_interlock_triggered{subsystem=\"container\"}[2m]) == 1) and on(subsystem) (co3ntrol_supervisor_lock{subsystem=\"container\"} == 0)",
+          "instant": true,
+          "intervalMs": 1000,
+          "maxDataPoints": 43200,
+          "range": false,
+          "refId": "A"
+        }
+      },
+      {
+        "refId": "C",
+        "relativeTimeRange": { "from": 0, "to": 0 },
+        "datasourceUid": "__expr__",
+        "model": {
+          "conditions": [
+            {
+              "evaluator": { "params": [0], "type": "gt" },
+              "operator": { "type": "and" },
+              "query": { "params": ["C"] },
+              "reducer": { "params": [], "type": "last" },
+              "type": "query"
+            }
+          ],
+          "datasource": { "type": "__expr__", "uid": "__expr__" },
+          "expression": "A",
+          "intervalMs": 1000,
+          "maxDataPoints": 43200,
+          "refId": "C",
+          "type": "threshold"
+        }
+      }
+    ]
+  },
+  {
+    "uid": "plant-liq-tower-warning",
+    "title": "liquefaction tower warning",
+    "folderUID": "f889bs",
+    "ruleGroup": "plant-co3ntrol",
+    "condition": "C",
+    "noDataState": "OK",
+    "execErrState": "Error",
+    "for": "2m",
+    "isPaused": false,
+    "labels": {
+      "team": "plant",
+      "severity": "warning",
+      "subsystem": "liquefaction"
+    },
+    "annotations": {
+      "summary": "Liquefaction cabinet tower warning light is on",
+      "description": "tower_warning_indicator is true while system_state_code is not DEBUG (2). Sticky while lit outside DEBUG; multiple HAZOP bits do not re-page. Ghost narrates decoded active_warnings / new bits. Suppressed entirely while liquefaction is in DEBUG.",
+      "runbook_url": "https://github.com/provocative-science/nanoclaw/blob/main/scripts/alert-monitor/deploy/GRAFANA_ONCALL.md"
+    },
+    "data": [
+      {
+        "refId": "A",
+        "relativeTimeRange": { "from": 600, "to": 0 },
+        "datasourceUid": "grafanacloud-prom",
+        "model": {
+          "editorMode": "code",
+          "expr": "(co3ntrol_liquefaction_controls_tower_warning_indicator{subsystem=\"liquefaction\"} == 1) and on(subsystem) (co3ntrol_liquefaction_sensors_system_state_code{subsystem=\"liquefaction\"} != 2)",
+          "instant": true,
+          "intervalMs": 1000,
+          "maxDataPoints": 43200,
+          "range": false,
+          "refId": "A"
+        }
+      },
+      {
+        "refId": "C",
+        "relativeTimeRange": { "from": 0, "to": 0 },
+        "datasourceUid": "__expr__",
+        "model": {
+          "conditions": [
+            {
+              "evaluator": { "params": [0], "type": "gt" },
+              "operator": { "type": "and" },
+              "query": { "params": ["C"] },
+              "reducer": { "params": [], "type": "last" },
+              "type": "query"
+            }
+          ],
+          "datasource": { "type": "__expr__", "uid": "__expr__" },
+          "expression": "A",
+          "intervalMs": 1000,
+          "maxDataPoints": 43200,
+          "refId": "C",
+          "type": "threshold"
+        }
+      }
+    ]
+  },
+  {
+    "uid": "plant-liq-tower-error",
+    "title": "liquefaction tower error",
+    "folderUID": "f889bs",
+    "ruleGroup": "plant-co3ntrol",
+    "condition": "C",
+    "noDataState": "OK",
+    "execErrState": "Error",
+    "for": "2m",
+    "isPaused": false,
+    "labels": {
+      "team": "plant",
+      "severity": "critical",
+      "subsystem": "liquefaction"
+    },
+    "annotations": {
+      "summary": "Liquefaction cabinet tower error light is on",
+      "description": "tower_error_indicator is true. May fire in addition to warning (severity escalate). Ghost narrates decoded active_errors.",
+      "runbook_url": "https://github.com/provocative-science/nanoclaw/blob/main/scripts/alert-monitor/deploy/GRAFANA_ONCALL.md"
+    },
+    "data": [
+      {
+        "refId": "A",
+        "relativeTimeRange": { "from": 600, "to": 0 },
+        "datasourceUid": "grafanacloud-prom",
+        "model": {
+          "editorMode": "code",
+          "expr": "co3ntrol_liquefaction_controls_tower_error_indicator{subsystem=\"liquefaction\"} == 1",
+          "instant": true,
+          "intervalMs": 1000,
+          "maxDataPoints": 43200,
+          "range": false,
+          "refId": "A"
+        }
+      },
+      {
+        "refId": "C",
+        "relativeTimeRange": { "from": 0, "to": 0 },
+        "datasourceUid": "__expr__",
+        "model": {
+          "conditions": [
+            {
+              "evaluator": { "params": [0], "type": "gt" },
+              "operator": { "type": "and" },
+              "query": { "params": ["C"] },
+              "reducer": { "params": [], "type": "last" },
+              "type": "query"
+            }
+          ],
+          "datasource": { "type": "__expr__", "uid": "__expr__" },
+          "expression": "A",
+          "intervalMs": 1000,
+          "maxDataPoints": 43200,
+          "refId": "C",
+          "type": "threshold"
+        }
+      }
+    ]
+  },
+  {
+    "uid": "plant-liq-system-state-error",
+    "title": "liquefaction system state ERROR",
+    "folderUID": "f889bs",
+    "ruleGroup": "plant-co3ntrol",
+    "condition": "C",
+    "noDataState": "OK",
+    "execErrState": "Error",
+    "for": "1m",
+    "isPaused": false,
+    "labels": {
+      "team": "plant",
+      "severity": "critical",
+      "subsystem": "liquefaction"
+    },
+    "annotations": {
+      "summary": "Liquefaction system_state_code is ERROR (3)",
+      "description": "system_state_code == 3 (ERROR). Fires on sticky ERROR including when the tower light may not be the only signal. Ghost host monitor edges on RUN/OFF/DEBUG → ERROR transitions.",
+      "runbook_url": "https://github.com/provocative-science/nanoclaw/blob/main/scripts/alert-monitor/deploy/GRAFANA_ONCALL.md"
+    },
+    "data": [
+      {
+        "refId": "A",
+        "relativeTimeRange": { "from": 600, "to": 0 },
+        "datasourceUid": "grafanacloud-prom",
+        "model": {
+          "editorMode": "code",
+          "expr": "co3ntrol_liquefaction_sensors_system_state_code{subsystem=\"liquefaction\"} == 3",
+          "instant": true,
+          "intervalMs": 1000,
+          "maxDataPoints": 43200,
+          "range": false,
+          "refId": "A"
+        }
+      },
+      {
+        "refId": "C",
+        "relativeTimeRange": { "from": 0, "to": 0 },
+        "datasourceUid": "__expr__",
+        "model": {
+          "conditions": [
+            {
+              "evaluator": { "params": [0], "type": "gt" },
+              "operator": { "type": "and" },
+              "query": { "params": ["C"] },
+              "reducer": { "params": [], "type": "last" },
+              "type": "query"
+            }
+          ],
+          "datasource": { "type": "__expr__", "uid": "__expr__" },
+          "expression": "A",
+          "intervalMs": 1000,
+          "maxDataPoints": 43200,
+          "refId": "C",
+          "type": "threshold"
+        }
+      }
+    ]
+  }
+]

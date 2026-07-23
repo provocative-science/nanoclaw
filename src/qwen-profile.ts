@@ -26,7 +26,9 @@ export function loadQwenProfile(): OpenAICompatProfile | null {
 
   const apiKey =
     process.env.QWEN_API_KEY?.trim() || fileVals.QWEN_API_KEY?.trim() || '';
-  if (!apiKey) return null;
+  if (!apiKey || /^PASTE_/i.test(apiKey) || apiKey.includes('REPLACE')) {
+    return null;
+  }
 
   const baseUrl = (
     process.env.QWEN_BASE_URL?.trim() ||
