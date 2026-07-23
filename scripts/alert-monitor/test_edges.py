@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from monitor import AlertMonitor
+from loki_abort import AbortLogHit, line_is_abort, new_hits_after, parse_loki_streams
 
 
 class CaptureMonitor(AlertMonitor):
@@ -523,6 +524,88 @@ def test_recent_deploy_helpers() -> None:
     assert block["checks"][0]["subsystem"] == "container"
 
 
+
+
+def test_loki_line_match_helpers() -> None:
+    assert line_is_abort("Purge of filter a failed! Aborting.")
+    assert line_is_abort("Vent of filter b failed!")
+    assert line_is_abort("Exiting for health reasons")
+    assert line_is_abort("Control set failed (bop.x); aborting.")
+    assert not line_is_abort("Begin filter a")
+    assert not line_is_abort("response failed: unknown, trying again in 1s")
+    assert not line_is_abort(
+        "2026-07-23T02:13:35Z INFO alloy-deploy-smoke co3ntrol-automation"
+    )
+
+
+def test_parse_loki_streams_filters() -> None:
+    payload = {
+        "data": {
+            "result": [
+                {
+                    "values": [
+                        ["100", "Begin filter a"],
+                        ["200", "Purge of filter a failed! Aborting."],
+                        ["150", "Setting bop control x to True"],
+                    ]
+                }
+            ]
+        }
+    }
+    hits = parse_loki_streams(payload)
+    assert [h.ts_ns for h in hits] == [200]
+    assert new_hits_after(hits, 200) == []
+    assert len(new_hits_after(hits, 199)) == 1
+
+
+def test_loki_automation_abort_edge() -> None:
+    m = CaptureMonitor()
+
+    class FakeLoki:
+        enabled = True
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def fetch_abort_hits(self, *, now=None):
+            self.calls += 1
+            if self.calls == 1:
+                return [
+                    AbortLogHit(
+                        ts_ns=200, line="Purge of filter a failed! Aborting."
+                    )
+                ]
+            if self.calls == 2:
+                return [
+                    AbortLogHit(
+                        ts_ns=200, line="Purge of filter a failed! Aborting."
+                    ),
+                    AbortLogHit(ts_ns=300, line="Vent of filter b failed!"),
+                ]
+            return [
+                AbortLogHit(ts_ns=300, line="Vent of filter b failed!"),
+                AbortLogHit(ts_ns=400, line="Exiting for health reasons"),
+            ]
+
+    m.loki = FakeLoki()
+    m.loki_poll_interval_s = 0
+
+    m.process_automation_loki(now=1.0)
+    assert m.fired == []
+    assert m.state.loki_primed is True
+    assert m.state.loki_last_ts_ns == 200
+
+    m.process_automation_loki(now=2.0)
+    assert len(m.fired) == 1
+    assert m.fired[0]["alert"]["kind"] == "job_failed"
+    assert m.fired[0]["alert"]["matched_line"] == "Vent of filter b failed!"
+    assert m.fired[0]["keys"] == ["container:job_failed:log"]
+
+    m.fired.clear()
+    m.process_automation_loki(now=3.0)
+    assert len(m.fired) == 1
+    assert m.fired[0]["alert"]["matched_line"] == "Exiting for health reasons"
+
 if __name__ == "__main__":
     from pathlib import Path
     import tempfile
@@ -534,6 +617,9 @@ if __name__ == "__main__":
     test_container_skip_interlock_while_locked()
     test_same_poll_lock_and_interlock()
     test_container_phase_in_alert()
+    test_loki_line_match_helpers()
+    test_parse_loki_streams_filters()
+    test_loki_automation_abort_edge()
     with tempfile.TemporaryDirectory() as td:
         test_mute_skips_fire(Path(td))
     test_recent_deploy_helpers()

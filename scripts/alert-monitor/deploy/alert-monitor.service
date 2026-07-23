@@ -1,5 +1,5 @@
 [Unit]
-Description=NanoClaw plant alert monitor (liq tower/state ERROR + container lock/interlocks → Ghost IPC)
+Description=NanoClaw plant alert monitor (liq tower/state ERROR + container lock/interlocks + Loki automation abort → Ghost IPC)
 After=network-online.target
 Wants=network-online.target
 

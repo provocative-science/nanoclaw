@@ -1,7 +1,7 @@
 # Grafana IRM / OnCall setup for plant alerts
 
 Stack: `https://provocativerob.grafana.net`  
-Datasource: `grafanacloud-provocativerob-prom` (uid `grafanacloud-prom`)
+Datasources: `grafanacloud-prom` (Mimir/PromQL), `grafanacloud-logs` (Loki/LogQL)
 
 This is the pager path parallel to the NanoClaw Ghost host monitor. Confirm metric
 names in Explore before enabling rules — co3ntrol-rs flattens telemetry dynamically.
@@ -20,7 +20,7 @@ GRAFANA_TOKEN=glsa_... ./scripts/alert-monitor/deploy/apply-grafana-plant-alerts
 ```
 
 Payloads live in:
-- `grafana-plant-alert-rules.json` — 5 rules in folder **Carbon Capture** (`f889bs`), labels `team=plant`
+- `grafana-plant-alert-rules.json` — 6 rules in folder **Carbon Capture** (`f889bs`), labels `team=plant`
 - `grafana-notification-policy.json` — `team=plant` → **Spark Grandpre** (before critical→bobiverse)
 
 3. **IRM → Escalation chains / Schedules** → who gets notified how.
@@ -53,6 +53,34 @@ Adjust the `and` join if label sets differ; the intent is: fire interlock OnCall
 
 `co3ntrol_interlock_triggered` is tick-sparse (often 1 only on the blocked-command
 sample) — use `max_over_time(...[2m])`.
+
+
+### Container automation abort (Loki)
+
+Datasource: `grafanacloud-logs` (not Prom). Fires when legacy Python
+`co3ntrol/automation/main.py` on bop-host writes an abort line to
+`/var/log/co3ntrol/automation-console.log` (Alloy → Loki,
+`service_name="co3ntrol-automation"`).
+
+```logql
+sum(count_over_time(
+  {subsystem="container", service_name="co3ntrol-automation"}
+    |~ "failed!|Exiting for health reasons|Control set failed"
+  [5m]
+))
+```
+
+- UID: `plant-container-automation-abort`
+- `severity=critical`, `for: 1m`, `noDataState: OK`
+- Matches purge/vent `failed!`, `Exiting for health reasons`, or
+  `Control set failed (...); aborting.` (all use `sys.exit(1)`).
+- Do **not** match routine lines (`Begin filter`, `Purging`, `Setting …`,
+  `response failed` retries without `failed!`).
+- Explore (raw lines):
+
+```logql
+{subsystem="container", service_name="co3ntrol-automation"}
+```
 
 ### Liquefaction tower warning
 
@@ -93,6 +121,12 @@ co3ntrol_liquefaction_sensors_system_state_code{subsystem="liquefaction"} == 3
 
 ## Verify metrics in Explore
 
+Loki (automation abort stream):
+
+```logql
+{subsystem="container", service_name="co3ntrol-automation"}
+```
+
 ```promql
 co3ntrol_supervisor_lock{subsystem="container"}
 co3ntrol_interlock_triggered{subsystem="container"}
@@ -108,8 +142,23 @@ If a name is missing, check Alloy scrape on lichost / bop-host and the live
 
 | Path | Purpose |
 |------|---------|
-| Grafana IRM | Page humans |
-| Host monitor → Ghost IPC | Rich narrative + Grafana MCP analysis |
+| Grafana IRM / OnCall | Page humans (PromQL + Loki rules) |
+| Host monitor → Ghost IPC | Rich narrative + archive; **also** polls Loki for automation aborts |
+
+### Ghost option B — automation abort (Loki API)
+
+Ghost does **not** wait for the Grafana OnCall rule to fire. `alert-monitor`
+on bob49 queries Loki for
+`{subsystem="container", service_name="co3ntrol-automation"}` abort lines
+(via Grafana datasource proxy or direct Loki basic auth), rising-edge +
+cooldown `container:job_failed:log`, kind `job_failed`.
+
+Requires `GRAFANA_URL` + `GRAFANA_SERVICE_ACCOUNT_TOKEN` (logs-capable SA;
+falls back to `secrets/mcp.env`) or `LOKI_URL` / `LOKI_USER` / `LOKI_TOKEN`.
+See `alert-monitor.env.example`.
+
+Grafana OnCall may still page on the same LogQL rule — that is a separate
+pager path. Mute Ghost with `mute alerts` does **not** mute OnCall.
 
 **Ghost mute:** Tag Ghost with `mute alerts` / `unmute alerts` in Telegram.
 NanoClaw writes `data/alert-monitor/mute.json`; the host monitor skips IPC

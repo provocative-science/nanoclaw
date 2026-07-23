@@ -3,9 +3,10 @@
 Plant alert monitor for NanoClaw (runs on bob49 — not the Pi LED client).
 
 Polls liquefaction tower indicators / HAZOP bitmasks / system_state ERROR
-transitions and container supervisor lock + triggered_interlocks. On rising
-edges, injects a one-shot schedule_task IPC so Ghost messages the main chat
-with context.
+transitions, container supervisor lock + triggered_interlocks, and (option B)
+Loki abort lines from Python automation-console.log. On rising edges, injects
+a one-shot schedule_task IPC so Ghost messages the plant chat with context.
+Loki polling is independent of Grafana Alerting / OnCall.
 
 Usage:
     # Dry-run: print would-be IPC payloads, never write
@@ -16,7 +17,9 @@ Usage:
 
 Env (see alert-monitor.env.example):
     LIQ_BASE_URL, BOP_BASE_URL, AUTH_TOKEN / LIQ_AUTH_TOKEN / BOP_AUTH_TOKEN,
-    TARGET_JID, IPC_GROUP_FOLDER, NANOCLAW_ROOT, COOLDOWN_S, POLL_INTERVAL_S
+    TARGET_JID, IPC_GROUP_FOLDER, NANOCLAW_ROOT, COOLDOWN_S, POLL_INTERVAL_S,
+    GRAFANA_URL + GRAFANA_SERVICE_ACCOUNT_TOKEN (or LOKI_URL/USER/TOKEN) for
+    Ghost option B Loki abort polling, LOKI_POLL_INTERVAL_S
 """
 
 from __future__ import annotations
@@ -33,6 +36,7 @@ from typing import Any
 import requests
 
 from conditions import decode_bits, decode_conditions
+from loki_abort import LokiAbortClient, new_hits_after
 from container_phase import phase_summary, snapshot_filter_controls
 from mute_state import is_muted
 from nanoclaw_ipc import schedule_once
@@ -192,6 +196,10 @@ class MonitorState:
     liq_system_state: str | None = None
     container_lock: bool = False
     interlock_names: set[str] = field(default_factory=set)
+    # Loki automation abort cursor (ns); primed after first successful query
+    loki_primed: bool = False
+    loki_last_ts_ns: int = 0
+    loki_next_poll_at: float = 0.0
     # After first sample, edges are meaningful
     liq_primed: bool = False
     bop_primed: bool = False
@@ -213,6 +221,8 @@ class AlertMonitor:
         dry_run: bool,
         recent_deploy_window_s: float = DEFAULT_RECENT_DEPLOY_WINDOW_S,
         target_thread_id: str | None = None,
+        loki_client: LokiAbortClient | None = None,
+        loki_poll_interval_s: float = 15.0,
     ) -> None:
         self.liq_telemetry = f"{liq_base.rstrip('/')}/api/v1/system/liquefaction/telemetry"
         self.liq_app_telemetry = f"{liq_base.rstrip('/')}/api/v1/telemetry"
@@ -226,6 +236,8 @@ class AlertMonitor:
         self.poll_interval_s = poll_interval_s
         self.dry_run = dry_run
         self.recent_deploy_window_s = recent_deploy_window_s
+        self.loki = loki_client
+        self.loki_poll_interval_s = loki_poll_interval_s
         self.state = MonitorState()
         self.cooldown = CooldownBook(cooldown_s)
 
@@ -527,6 +539,69 @@ class AlertMonitor:
         self.state.container_lock = lock
         self.state.interlock_names = names
 
+
+    def process_automation_loki(self, now: float | None = None) -> None:
+        """Rising-edge on new abort lines in automation-console.log via Loki."""
+        if self.loki is None or not self.loki.enabled:
+            return
+        now = time.time() if now is None else now
+        if now < self.state.loki_next_poll_at:
+            return
+        self.state.loki_next_poll_at = now + self.loki_poll_interval_s
+
+        try:
+            hits = self.loki.fetch_abort_hits(now=now)
+        except Exception as e:
+            print(f"[ERROR] Loki automation abort query: {e}", flush=True)
+            return
+
+        if not self.state.loki_primed:
+            max_ts = max((h.ts_ns for h in hits), default=int(now * 1e9))
+            self.state.loki_last_ts_ns = max_ts
+            self.state.loki_primed = True
+            print(
+                f"[LOKI] primed automation-abort cursor_ts_ns={max_ts} "
+                f"recent_hits={len(hits)}",
+                flush=True,
+            )
+            return
+
+        new = new_hits_after(hits, self.state.loki_last_ts_ns)
+        if not new:
+            return
+
+        # Advance cursor even if cooldown suppresses fire
+        self.state.loki_last_ts_ns = max(h.ts_ns for h in new)
+
+        latest = new[-1]
+        matched_lines = [h.line for h in new]
+        phase = None
+        filter_controls = None
+        bop_sensors: dict[str, Any] = {}
+        bop = fetch_latest(self.bop_telemetry, "container", self.bop_token)
+        if bop is not None:
+            app = bop.get("app") or {}
+            system = app.get("system") or {}
+            phase = phase_summary(system)
+            filter_controls = snapshot_filter_controls(system)
+            bop_sensors = pick(
+                (system.get("bop") or {}).get("sensors") or {}, BOP_SENSOR_KEYS
+            )
+
+        alert = {
+            "subsystem": "container",
+            "kind": "job_failed",
+            "source": "loki",
+            "job_id": "container_system",
+            "matched_line": latest.line,
+            "matched_lines": matched_lines,
+            "match_count": len(new),
+            "phase": phase,
+            "filter_controls": filter_controls,
+            "bop_sensors": bop_sensors,
+        }
+        self.fire(alert, ["container:job_failed:log"])
+
     def loop_once(self) -> None:
         liq = fetch_latest(self.liq_telemetry, "liquefaction", self.liq_token)
         if liq is not None:
@@ -542,11 +617,19 @@ class AlertMonitor:
             except Exception as e:
                 print(f"[ERROR] processing container: {e}", flush=True)
 
+        try:
+            self.process_automation_loki()
+        except Exception as e:
+            print(f"[ERROR] processing automation Loki: {e}", flush=True)
+
     def run(self) -> None:
         print(
             f"Alert monitor starting\n"
             f"  liq: {self.liq_telemetry}\n"
             f"  bop: {self.bop_telemetry}\n"
+            f"  loki_abort: "
+            f"{'enabled' if (self.loki and self.loki.enabled) else 'disabled'} "
+            f"poll={self.loki_poll_interval_s}s\n"
             f"  ipc: {self.nanoclaw_root}/data/ipc/{self.ipc_group_folder}/tasks\n"
             f"  targetJid: {self.target_jid}\n"
             f"  targetThreadId: {self.target_thread_id or '(chat default)'}\n"
@@ -604,6 +687,33 @@ def main() -> int:
         )
     ).resolve()
 
+    loki_client = LokiAbortClient(
+        grafana_url=os.environ.get("GRAFANA_URL", ""),
+        grafana_token=os.environ.get("GRAFANA_SERVICE_ACCOUNT_TOKEN", ""),
+        datasource_uid=os.environ.get("LOKI_DATASOURCE_UID", "grafanacloud-logs"),
+        loki_url=os.environ.get("LOKI_URL", ""),
+        loki_user=os.environ.get("LOKI_USER", ""),
+        loki_token=os.environ.get("LOKI_TOKEN", ""),
+        lookback_s=env_float("LOKI_LOOKBACK_S", 120.0),
+    )
+    # Optional: pull Grafana SA from mcp.env if not in alert-monitor.env
+    if not loki_client.enabled:
+        mcp_env = nanoclaw_root / "secrets" / "mcp.env"
+        if mcp_env.is_file():
+            for line in mcp_env.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, v = line.split("=", 1)
+                v = v.strip().strip("'").strip('"')
+                if k == "GRAFANA_URL" and not loki_client.grafana_url:
+                    loki_client.grafana_url = v.rstrip("/")
+                elif (
+                    k == "GRAFANA_SERVICE_ACCOUNT_TOKEN"
+                    and not loki_client.grafana_token
+                ):
+                    loki_client.grafana_token = v
+
     monitor = AlertMonitor(
         liq_base=os.environ.get("LIQ_BASE_URL", DEFAULT_LIQ_BASE),
         bop_base=os.environ.get("BOP_BASE_URL", DEFAULT_BOP_BASE),
@@ -622,6 +732,8 @@ def main() -> int:
         recent_deploy_window_s=env_float(
             "RECENT_DEPLOY_WINDOW_S", DEFAULT_RECENT_DEPLOY_WINDOW_S
         ),
+        loki_client=loki_client if loki_client.enabled else None,
+        loki_poll_interval_s=env_float("LOKI_POLL_INTERVAL_S", 15.0),
     )
 
     if args.once:

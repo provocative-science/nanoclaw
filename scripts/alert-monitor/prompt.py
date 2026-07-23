@@ -115,6 +115,12 @@ Also skim `/workspace/shared/plant-alerts/latest.md` for prior alert context.
    liquefaction status. Always state the cycle **phase** (see below) — use
    the payload `phase` field when present; otherwise infer from filter/
    DAC valve metrics (`co3ntrol_dac_filter_controls_*`) or Loki job logs.
+3b. **job_failed** (automation abort from Loki): quote `matched_line` (and
+   other `matched_lines` if present). Classify purge / vent / health /
+   control-set abort from that text. This path is **independent of Grafana
+   Alerting** — the monitor polled Loki directly. Still pull recent
+   `subsystem="container"` Prom metrics for context; do not wait for a
+   Grafana OnCall page.
 4. Recent deploy / restart: if payload `recent_deploy.likely` is true, note
    which host(s) show low `app.systick` uptime and weigh post-restart
    startup against a true fault. Confirm with
@@ -146,7 +152,7 @@ from the payload `fired_at` if needed. Keep the whole message concise
 *Subsystem:* <liquefaction | container>
 *Time:* <YYYY-MM-DD HH:MM ET>
 [if liquefaction] *State:* <OFF | DEBUG | RUN | ERROR>
-[if container] *Condition:* <locked | active_recovery | interlock_only>
+[if container] *Condition:* <locked | active_recovery | interlock_only | job_failed>
 [if container] *Phase:* <e.g. Extracting Filter E; Purging Filter F>
 [if recent_deploy.likely] *Recent deploy/restart:* <which host(s), approx uptime>
 

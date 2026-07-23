@@ -22,7 +22,10 @@
     "data": [
       {
         "refId": "A",
-        "relativeTimeRange": { "from": 600, "to": 0 },
+        "relativeTimeRange": {
+          "from": 600,
+          "to": 0
+        },
         "datasourceUid": "grafanacloud-prom",
         "model": {
           "editorMode": "code",
@@ -36,19 +39,39 @@
       },
       {
         "refId": "C",
-        "relativeTimeRange": { "from": 0, "to": 0 },
+        "relativeTimeRange": {
+          "from": 0,
+          "to": 0
+        },
         "datasourceUid": "__expr__",
         "model": {
           "conditions": [
             {
-              "evaluator": { "params": [0], "type": "gt" },
-              "operator": { "type": "and" },
-              "query": { "params": ["C"] },
-              "reducer": { "params": [], "type": "last" },
+              "evaluator": {
+                "params": [
+                  0
+                ],
+                "type": "gt"
+              },
+              "operator": {
+                "type": "and"
+              },
+              "query": {
+                "params": [
+                  "C"
+                ]
+              },
+              "reducer": {
+                "params": [],
+                "type": "last"
+              },
               "type": "query"
             }
           ],
-          "datasource": { "type": "__expr__", "uid": "__expr__" },
+          "datasource": {
+            "type": "__expr__",
+            "uid": "__expr__"
+          },
           "expression": "A",
           "intervalMs": 1000,
           "maxDataPoints": 43200,
@@ -81,7 +104,10 @@
     "data": [
       {
         "refId": "A",
-        "relativeTimeRange": { "from": 600, "to": 0 },
+        "relativeTimeRange": {
+          "from": 600,
+          "to": 0
+        },
         "datasourceUid": "grafanacloud-prom",
         "model": {
           "editorMode": "code",
@@ -95,24 +121,125 @@
       },
       {
         "refId": "C",
-        "relativeTimeRange": { "from": 0, "to": 0 },
+        "relativeTimeRange": {
+          "from": 0,
+          "to": 0
+        },
         "datasourceUid": "__expr__",
         "model": {
           "conditions": [
             {
-              "evaluator": { "params": [0], "type": "gt" },
-              "operator": { "type": "and" },
-              "query": { "params": ["C"] },
-              "reducer": { "params": [], "type": "last" },
+              "evaluator": {
+                "params": [
+                  0
+                ],
+                "type": "gt"
+              },
+              "operator": {
+                "type": "and"
+              },
+              "query": {
+                "params": [
+                  "C"
+                ]
+              },
+              "reducer": {
+                "params": [],
+                "type": "last"
+              },
               "type": "query"
             }
           ],
-          "datasource": { "type": "__expr__", "uid": "__expr__" },
+          "datasource": {
+            "type": "__expr__",
+            "uid": "__expr__"
+          },
           "expression": "A",
           "intervalMs": 1000,
           "maxDataPoints": 43200,
           "refId": "C",
           "type": "threshold"
+        }
+      }
+    ]
+  },
+  {
+    "uid": "plant-container-automation-abort",
+    "title": "container automation job abort",
+    "folderUID": "f889bs",
+    "ruleGroup": "plant-co3ntrol",
+    "condition": "C",
+    "noDataState": "OK",
+    "execErrState": "Error",
+    "for": "1m",
+    "isPaused": false,
+    "labels": {
+      "team": "plant",
+      "severity": "critical",
+      "subsystem": "container"
+    },
+    "annotations": {
+      "summary": "Container automation aborted",
+      "description": "Abort line in automation-console.log on bop-host (service_name=co3ntrol-automation). Matches failed!, Exiting for health reasons, or Control set failed from legacy Python main.py. Explore that LogQL stream for the matched line.",
+      "runbook_url": "https://github.com/provocative-science/nanoclaw/blob/main/scripts/alert-monitor/deploy/GRAFANA_ONCALL.md"
+    },
+    "data": [
+      {
+        "refId": "A",
+        "relativeTimeRange": {
+          "from": 600,
+          "to": 0
+        },
+        "datasourceUid": "grafanacloud-logs",
+        "model": {
+          "editorMode": "code",
+          "expr": "sum(count_over_time({subsystem=\"container\", service_name=\"co3ntrol-automation\"} |~ \"failed!|Exiting for health reasons|Control set failed\" [5m]))",
+          "queryType": "instant",
+          "intervalMs": 1000,
+          "maxDataPoints": 43200,
+          "refId": "A"
+        }
+      },
+      {
+        "refId": "C",
+        "relativeTimeRange": {
+          "from": 0,
+          "to": 0
+        },
+        "datasourceUid": "__expr__",
+        "model": {
+          "type": "threshold",
+          "datasource": {
+            "type": "__expr__",
+            "uid": "__expr__"
+          },
+          "conditions": [
+            {
+              "evaluator": {
+                "params": [
+                  0
+                ],
+                "type": "gt"
+              },
+              "operator": {
+                "type": "and"
+              },
+              "query": {
+                "params": [
+                  "C"
+                ]
+              },
+              "reducer": {
+                "params": [],
+                "type": "last"
+              },
+              "type": "query"
+            }
+          ],
+          "expression": "A",
+          "intervalMs": 1000,
+          "maxDataPoints": 43200,
+          "refId": "C"
         }
       }
     ]
@@ -140,7 +267,10 @@
     "data": [
       {
         "refId": "A",
-        "relativeTimeRange": { "from": 600, "to": 0 },
+        "relativeTimeRange": {
+          "from": 600,
+          "to": 0
+        },
         "datasourceUid": "grafanacloud-prom",
         "model": {
           "editorMode": "code",
@@ -154,19 +284,39 @@
       },
       {
         "refId": "C",
-        "relativeTimeRange": { "from": 0, "to": 0 },
+        "relativeTimeRange": {
+          "from": 0,
+          "to": 0
+        },
         "datasourceUid": "__expr__",
         "model": {
           "conditions": [
             {
-              "evaluator": { "params": [0], "type": "gt" },
-              "operator": { "type": "and" },
-              "query": { "params": ["C"] },
-              "reducer": { "params": [], "type": "last" },
+              "evaluator": {
+                "params": [
+                  0
+                ],
+                "type": "gt"
+              },
+              "operator": {
+                "type": "and"
+              },
+              "query": {
+                "params": [
+                  "C"
+                ]
+              },
+              "reducer": {
+                "params": [],
+                "type": "last"
+              },
               "type": "query"
             }
           ],
-          "datasource": { "type": "__expr__", "uid": "__expr__" },
+          "datasource": {
+            "type": "__expr__",
+            "uid": "__expr__"
+          },
           "expression": "A",
           "intervalMs": 1000,
           "maxDataPoints": 43200,
@@ -199,7 +349,10 @@
     "data": [
       {
         "refId": "A",
-        "relativeTimeRange": { "from": 600, "to": 0 },
+        "relativeTimeRange": {
+          "from": 600,
+          "to": 0
+        },
         "datasourceUid": "grafanacloud-prom",
         "model": {
           "editorMode": "code",
@@ -213,19 +366,39 @@
       },
       {
         "refId": "C",
-        "relativeTimeRange": { "from": 0, "to": 0 },
+        "relativeTimeRange": {
+          "from": 0,
+          "to": 0
+        },
         "datasourceUid": "__expr__",
         "model": {
           "conditions": [
             {
-              "evaluator": { "params": [0], "type": "gt" },
-              "operator": { "type": "and" },
-              "query": { "params": ["C"] },
-              "reducer": { "params": [], "type": "last" },
+              "evaluator": {
+                "params": [
+                  0
+                ],
+                "type": "gt"
+              },
+              "operator": {
+                "type": "and"
+              },
+              "query": {
+                "params": [
+                  "C"
+                ]
+              },
+              "reducer": {
+                "params": [],
+                "type": "last"
+              },
               "type": "query"
             }
           ],
-          "datasource": { "type": "__expr__", "uid": "__expr__" },
+          "datasource": {
+            "type": "__expr__",
+            "uid": "__expr__"
+          },
           "expression": "A",
           "intervalMs": 1000,
           "maxDataPoints": 43200,
@@ -252,13 +425,16 @@
     },
     "annotations": {
       "summary": "Liquefaction system_state_code is ERROR (3)",
-      "description": "system_state_code == 3 (ERROR). Fires on sticky ERROR including when the tower light may not be the only signal. Ghost host monitor edges on RUN/OFF/DEBUG → ERROR transitions.",
+      "description": "system_state_code == 3 (ERROR). Fires on sticky ERROR including when the tower light may not be the only signal. Ghost host monitor edges on RUN/OFF/DEBUG \u2192 ERROR transitions.",
       "runbook_url": "https://github.com/provocative-science/nanoclaw/blob/main/scripts/alert-monitor/deploy/GRAFANA_ONCALL.md"
     },
     "data": [
       {
         "refId": "A",
-        "relativeTimeRange": { "from": 600, "to": 0 },
+        "relativeTimeRange": {
+          "from": 600,
+          "to": 0
+        },
         "datasourceUid": "grafanacloud-prom",
         "model": {
           "editorMode": "code",
@@ -272,19 +448,39 @@
       },
       {
         "refId": "C",
-        "relativeTimeRange": { "from": 0, "to": 0 },
+        "relativeTimeRange": {
+          "from": 0,
+          "to": 0
+        },
         "datasourceUid": "__expr__",
         "model": {
           "conditions": [
             {
-              "evaluator": { "params": [0], "type": "gt" },
-              "operator": { "type": "and" },
-              "query": { "params": ["C"] },
-              "reducer": { "params": [], "type": "last" },
+              "evaluator": {
+                "params": [
+                  0
+                ],
+                "type": "gt"
+              },
+              "operator": {
+                "type": "and"
+              },
+              "query": {
+                "params": [
+                  "C"
+                ]
+              },
+              "reducer": {
+                "params": [],
+                "type": "last"
+              },
               "type": "query"
             }
           ],
-          "datasource": { "type": "__expr__", "uid": "__expr__" },
+          "datasource": {
+            "type": "__expr__",
+            "uid": "__expr__"
+          },
           "expression": "A",
           "intervalMs": 1000,
           "maxDataPoints": 43200,
