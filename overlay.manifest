@@ -1,0 +1,8 @@
+# Paths owned by instance/provocative (never merge into main)
+INSTANCE.md
+CLAUDE.md
+groups/global/CLAUDE.md
+groups/main/CLAUDE.md
+scripts/alert-monitor
+secrets/mcp.env.example
+secrets/qwen.env.example
