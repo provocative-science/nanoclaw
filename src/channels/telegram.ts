@@ -4,7 +4,12 @@ import path from 'path';
 
 import { Api, Bot, InputFile } from 'grammy';
 
-import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
+import {
+  ASSISTANT_NAME,
+  TRIGGER_PATTERN,
+  allowDevTelegram,
+  isDevInstance,
+} from '../config.js';
 import { readEnvFile } from '../env.js';
 import { resolveGroupFolderPath } from '../group-folder.js';
 import { logger } from '../logger.js';
@@ -491,6 +496,13 @@ registerChannel('telegram', (opts: ChannelOpts) => {
     process.env.TELEGRAM_BOT_TOKEN || envVars.TELEGRAM_BOT_TOKEN || '';
   if (!token) {
     logger.warn('Telegram: TELEGRAM_BOT_TOKEN not set');
+    return null;
+  }
+  // Dev instances must not share the production bot token (duplicate Ghost replies).
+  if (isDevInstance() && !allowDevTelegram()) {
+    logger.warn(
+      'Telegram: disabled for NANOCLAW_INSTANCE=dev (set NANOCLAW_ALLOW_DEV_TELEGRAM=1 only with a separate test bot token)',
+    );
     return null;
   }
   return new TelegramChannel(token, opts);
