@@ -47,11 +47,16 @@ else
   echo "OK: scripts/alert-monitor/ not on HEAD"
 fi
 
-if git grep -n -I -i 'provocativerob\.grafana\.net' HEAD -- ':!docs/INSTANCE-OVERLAY.md' ':!.env.dev.example' 2>/dev/null | head -5; then
-  echo "WARN: provocativerob.grafana.net found on HEAD (prefer overlay secrets examples)"
+# Build pattern in parts so this script itself is not a false positive.
+STACK_HOST="provocativerob"
+STACK_HOST+=".grafana.net"
+if git grep -n -I -i "${STACK_HOST//./\\.}" HEAD \
+  -- ':!docs/INSTANCE-OVERLAY.md' ':!.env.dev.example' ':!scripts/instance-overlay/*' \
+  2>/dev/null | head -5; then
+  echo "WARN: ${STACK_HOST} found on HEAD (prefer overlay secrets examples)"
   DIRTY=1
 else
-  echo "OK: no provocativerob.grafana.net on HEAD (or only in allowed docs)"
+  echo "OK: no ${STACK_HOST} on HEAD (or only in allowed docs)"
 fi
 
 exit "$DIRTY"
