@@ -55,9 +55,15 @@ if [[ "$CURRENT" =~ ^instance/ ]]; then
     fi
   done < "$MANIFEST_FILE"
 
-  # Must share history with tools (not orphan)
+  # Must share history with tools (not orphan). Prefer local tools branch tip.
   TOOLS_REF="$TOOLS"
-  git rev-parse --verify "origin/$TOOLS" >/dev/null 2>&1 && TOOLS_REF="origin/$TOOLS"
+  if [[ "$TOOLS" == origin/* ]]; then
+    :
+  elif git rev-parse --verify "refs/heads/$TOOLS" >/dev/null 2>&1; then
+    TOOLS_REF="$TOOLS"
+  elif git rev-parse --verify "refs/remotes/origin/$TOOLS" >/dev/null 2>&1; then
+    TOOLS_REF="origin/$TOOLS"
+  fi
   if git merge-base HEAD "$TOOLS_REF" >/dev/null 2>&1; then
     ok "shares history with $TOOLS_REF"
     BEHIND="$(git rev-list --count HEAD.."$TOOLS_REF" 2>/dev/null || echo 0)"
