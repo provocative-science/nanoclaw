@@ -1,30 +1,28 @@
 #!/usr/bin/env bash
-# Apply instance overlay files from branch instance/<name> onto the working tree.
-# Does NOT copy live .env tokens. Run from repo root.
+# Legacy entrypoint — overlay is no longer path-checkout onto a tools branch.
+# Deploy / develop plant config on the instance/* branch instead.
 set -euo pipefail
-
-ROOT="$(git rev-parse --show-toplevel)"
-cd "$ROOT"
 
 INSTANCE="${NANOCLAW_OVERLAY_INSTANCE:-provocative}"
 BRANCH="instance/${INSTANCE}"
 
-if ! git rev-parse --verify "$BRANCH" >/dev/null 2>&1; then
-  echo "error: branch $BRANCH not found. Fetch it or create with capture.sh" >&2
-  exit 1
-fi
+cat <<EOF >&2
+The orphan-branch apply model was replaced by a full deploy branch.
 
-if ! git cat-file -e "${BRANCH}:overlay.manifest" 2>/dev/null; then
-  echo "error: ${BRANCH}:overlay.manifest is missing" >&2
-  exit 1
-fi
+  Tools (generic):     main  (and feature branches)
+  Plant deploy:        ${BRANCH}   = tools history + instance commits
 
-echo "Applying overlay from $BRANCH ..."
-while IFS= read -r path || [[ -n "$path" ]]; do
-  [[ -z "$path" || "$path" =~ ^# ]] && continue
-  git checkout "$BRANCH" -- "$path"
-  echo "  + $path"
-done < <(git show "${BRANCH}:overlay.manifest")
+To use the Provocative instance:
 
-echo "Done. Overlay applied (working tree may show modifications vs current branch)."
-echo "Reminder: do not set production TELEGRAM_BOT_TOKEN in .env for this tree."
+  git fetch origin
+  git switch ${BRANCH}
+  ./scripts/instance-overlay/verify-workflow.sh
+
+To bring in latest tools (merge only, never rebase):
+
+  git switch ${BRANCH}
+  ./scripts/instance-overlay/sync-from-main.sh
+
+See docs/INSTANCE-OVERLAY.md
+EOF
+exit 1

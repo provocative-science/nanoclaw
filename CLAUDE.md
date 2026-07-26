@@ -6,7 +6,7 @@ Personal Claude assistant. See [README.md](README.md) for philosophy and setup. 
 
 Single Node.js process with skill-based channel system. Channels (WhatsApp, Telegram, Slack, Discord, Gmail) are skills that self-register at startup. Messages route to Claude Agent SDK running in containers (Linux VMs). Each group has isolated filesystem and memory.
 
-Instance-specific deploy paths and plant memory live on `instance/<name>` overlays — see [docs/INSTANCE-OVERLAY.md](docs/INSTANCE-OVERLAY.md).
+Instance deploys use long-lived `instance/<name>` branches (tools history + plant commits). Sync with `./scripts/instance-overlay/sync-from-main.sh` (**merge only**). Never merge `instance/*` into `main`. See [docs/INSTANCE-OVERLAY.md](docs/INSTANCE-OVERLAY.md).
 
 ## Key Files
 
