@@ -1,0 +1,10 @@
+# Paths owned by the instance deploy branch (instance/<name>).
+# On tools branches (main): keep stubs/placeholders only — never plant content.
+# On instance/<name>: full plant content lives here; sync tools via sync-from-main.sh.
+INSTANCE.md
+CLAUDE.md
+groups/global/CLAUDE.md
+groups/main/CLAUDE.md
+scripts/alert-monitor
+secrets/mcp.env.example
+secrets/qwen.env.example

@@ -6,7 +6,7 @@ Personal Claude assistant. See [README.md](README.md) for philosophy and setup. 
 
 Single Node.js process with skill-based channel system. Channels (WhatsApp, Telegram, Slack, Discord, Gmail) are skills that self-register at startup. Messages route to Claude Agent SDK running in containers (Linux VMs). Each group has isolated filesystem and memory.
 
-Instance deploys use long-lived `instance/<name>` branches (tools history + plant commits). Sync with `./scripts/instance-overlay/sync-from-main.sh` (**merge only**). Never merge `instance/*` into `main`. See [docs/INSTANCE-OVERLAY.md](docs/INSTANCE-OVERLAY.md).
+On servers (e.g. bob49) this checkout lives under **`~/provocative/nanoclaw`** — all-lowercase `provocative`. There is no parallel `~/Provocative/nanoclaw` deployment path for NanoClaw.
 
 ## Key Files
 
@@ -57,7 +57,7 @@ Stdio MCP servers configured for groups read **`groups/{name}/.mcp.json`**. That
 
 **Grafana MCP:** the template uses the official `uvx mcp-grafana` invocation per Grafana docs. The **agent container image** installs `uv` / `uvx` (see `container/Dockerfile`) so that command works; wiring still comes from this envsubst pipeline and `loadGroupMcpServersFromDisk()` merging `groups/*/.mcp.json` into the SDK.
 
-**Observability notes for agents:** put stack-specific Grafana/Alloy guidance in the instance overlay’s `groups/global/CLAUDE.md` (mounted as `/workspace/global/CLAUDE.md`), not in the shared tools tree.
+**Observability (co3ntrol-rs / Grafana Cloud):** OTLP → Alloy → Mimir/Loki/Tempo, resource attributes, metrics vs logs vs traces, and Grafana MCP usage for the CO₂ control plane are documented for agents in [`groups/global/CLAUDE.md`](groups/global/CLAUDE.md) (mounted in containers as `/workspace/global/CLAUDE.md`).
 
 ## Skills
 
