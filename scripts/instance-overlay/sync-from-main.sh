@@ -25,11 +25,13 @@ if [[ -n "$(git status --porcelain)" ]]; then
 fi
 
 TOOLS="${1:-${NANOCLAW_TOOLS_BRANCH:-main}}"
-# Prefer remote-tracking ref when a bare branch name is given
-if git rev-parse --verify "refs/remotes/origin/${TOOLS#origin/}" >/dev/null 2>&1 && [[ "$TOOLS" != origin/* ]]; then
-  if git rev-parse --verify "refs/remotes/origin/$TOOLS" >/dev/null 2>&1; then
-    TOOLS="origin/$TOOLS"
-  fi
+# Prefer a local branch when present (may be ahead of origin/*). Else origin/<name>.
+if [[ "$TOOLS" == origin/* ]]; then
+  :
+elif git rev-parse --verify "refs/heads/$TOOLS" >/dev/null 2>&1; then
+  :
+elif git rev-parse --verify "refs/remotes/origin/$TOOLS" >/dev/null 2>&1; then
+  TOOLS="origin/$TOOLS"
 fi
 
 if ! git rev-parse --verify "$TOOLS" >/dev/null 2>&1; then
