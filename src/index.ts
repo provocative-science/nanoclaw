@@ -6,6 +6,7 @@ import { OneCLI } from '@onecli-sh/sdk';
 import {
   ASSISTANT_NAME,
   DEFAULT_TRIGGER,
+  allowNoChannels,
   getTriggerPattern,
   GROUPS_DIR,
   IDLE_TIMEOUT,
@@ -886,8 +887,14 @@ async function main(): Promise<void> {
     await channel.connect();
   }
   if (channels.length === 0) {
-    logger.fatal('No channels connected');
-    process.exit(1);
+    if (allowNoChannels()) {
+      logger.warn(
+        'No channels connected — continuing because NANOCLAW_ALLOW_NO_CHANNELS=1',
+      );
+    } else {
+      logger.fatal('No channels connected');
+      process.exit(1);
+    }
   }
 
   // Start subsystems (independently of connection handler)

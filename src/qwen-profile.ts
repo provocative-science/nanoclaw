@@ -10,12 +10,10 @@ import type { OpenAICompatProfile } from './openai-client.js';
 
 const QWEN_ENV_PATH = path.join(process.cwd(), 'secrets', 'qwen.env');
 
-const DEFAULT_BASE_URL = 'https://inference.provocative.earth/v1';
-const DEFAULT_MODEL = 'qwen3.6-35b';
-
 /**
  * Load the Qwen OpenAI-compat profile from secrets/qwen.env (and process.env overrides).
- * Returns null if no API key is configured.
+ * Returns null if API key or base URL is not configured.
+ * Instance-specific defaults belong in secrets/qwen.env (via instance overlay examples).
  */
 export function loadQwenProfile(): OpenAICompatProfile | null {
   const fileVals = readEnvFileFromPath(QWEN_ENV_PATH, [
@@ -30,16 +28,22 @@ export function loadQwenProfile(): OpenAICompatProfile | null {
     return null;
   }
 
-  const baseUrl = (
-    process.env.QWEN_BASE_URL?.trim() ||
-    fileVals.QWEN_BASE_URL?.trim() ||
-    DEFAULT_BASE_URL
-  ).replace(/\/$/, '');
+  const baseUrlRaw =
+    process.env.QWEN_BASE_URL?.trim() || fileVals.QWEN_BASE_URL?.trim() || '';
+  if (
+    !baseUrlRaw ||
+    /^https:\/\/YOUR_/i.test(baseUrlRaw) ||
+    baseUrlRaw.includes('REPLACE')
+  ) {
+    return null;
+  }
+  const baseUrl = baseUrlRaw.replace(/\/$/, '');
 
   const model =
-    process.env.QWEN_MODEL?.trim() ||
-    fileVals.QWEN_MODEL?.trim() ||
-    DEFAULT_MODEL;
+    process.env.QWEN_MODEL?.trim() || fileVals.QWEN_MODEL?.trim() || '';
+  if (!model || /^YOUR_/i.test(model) || model.includes('REPLACE')) {
+    return null;
+  }
 
   return { baseUrl, apiKey, model };
 }

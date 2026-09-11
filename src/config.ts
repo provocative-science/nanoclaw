@@ -25,23 +25,57 @@ export const AUTO_REGISTER_SYNC_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const PROJECT_ROOT = process.cwd();
 const HOME_DIR = process.env.HOME || os.homedir();
 
-// Mount security: allowlist stored OUTSIDE project root, never mounted into containers
+function envOrDotenv(key: string): string | undefined {
+  if (process.env[key]) return process.env[key];
+  return readEnvFile([key])[key];
+}
+
+function expandHomePrefix(value: string): string {
+  if (value.startsWith('${HOME}')) {
+    return HOME_DIR + value.slice('${HOME}'.length);
+  }
+  if (value.startsWith('$HOME')) {
+    return HOME_DIR + value.slice('$HOME'.length);
+  }
+  if (value.startsWith('~/')) {
+    return path.join(HOME_DIR, value.slice(2));
+  }
+  return value;
+}
+
+/** `dev` refuses Telegram unless NANOCLAW_ALLOW_DEV_TELEGRAM=1 (avoids dual-bot replies). */
+export function getNanoclawInstance(): string {
+  return (envOrDotenv('NANOCLAW_INSTANCE') || 'prod').toLowerCase();
+}
+
+export function isDevInstance(): boolean {
+  return getNanoclawInstance() === 'dev';
+}
+
+export function allowDevTelegram(): boolean {
+  return envOrDotenv('NANOCLAW_ALLOW_DEV_TELEGRAM') === '1';
+}
+
+/** When set, host may start with zero connected chat channels (dev / claw-only). */
+export function allowNoChannels(): boolean {
+  return envOrDotenv('NANOCLAW_ALLOW_NO_CHANNELS') === '1';
+}
+
+// Allowlists live outside the project root. Override for isolated dev instances.
+const CONFIG_HOME = expandHomePrefix(
+  envOrDotenv('NANOCLAW_CONFIG_HOME') ||
+    path.join(HOME_DIR, '.config', 'nanoclaw'),
+);
 export const MOUNT_ALLOWLIST_PATH = path.join(
-  HOME_DIR,
-  '.config',
-  'nanoclaw',
+  CONFIG_HOME,
   'mount-allowlist.json',
 );
 export const SENDER_ALLOWLIST_PATH = path.join(
-  HOME_DIR,
-  '.config',
-  'nanoclaw',
+  CONFIG_HOME,
   'sender-allowlist.json',
 );
 export const AUTO_REGISTER_ALLOWLIST_PATH = path.join(
-  HOME_DIR,
-  '.config',
-  'nanoclaw',
+  CONFIG_HOME,
   'auto-register-allowlist.json',
 );
 export const STORE_DIR = path.resolve(PROJECT_ROOT, 'store');
