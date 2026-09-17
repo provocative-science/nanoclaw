@@ -497,7 +497,8 @@ async function runQuery(
         'NotebookEdit',
         'mcp__nanoclaw__*',
         'mcp__notion__*',
-        'mcp__grafana__*'
+        'mcp__grafana__*',
+        'mcp__telemetry__*'
       ],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',

@@ -3,6 +3,10 @@
     "grafana": {
       "command": "bash",
       "args": ["${workspaceFolder}/scripts/run-grafana-mcp.sh"]
+    },
+    "telemetry": {
+      "command": "bash",
+      "args": ["${workspaceFolder}/scripts/run-telemetry-mcp.sh"]
     }
   }
 }

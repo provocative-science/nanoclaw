@@ -37,6 +37,10 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | XDG_BIN_HOME=/usr/local/bin sh 
 RUN pip3 install --no-cache-dir --break-system-packages matplotlib \
     && python3 -c "import matplotlib; matplotlib.use('Agg'); import matplotlib.pyplot as plt; print(matplotlib.__version__)"
 
+# DuckDB + MCP + boto3 for plant telemetry S3 (Wasabi parquet)
+COPY telemetry-mcp/requirements.txt /tmp/telemetry-mcp-requirements.txt
+RUN pip3 install --no-cache-dir --break-system-packages -r /tmp/telemetry-mcp-requirements.txt
+
 # Set Chromium path for agent-browser
 ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
 ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium
@@ -57,6 +61,9 @@ RUN npm install
 
 # Copy source code
 COPY agent-runner/ ./
+
+# Plant telemetry MCP (stdio) — queried with Wasabi creds from groups/*/.mcp.json
+COPY telemetry-mcp/ /app/telemetry-mcp/
 
 # Build TypeScript
 RUN npm run build

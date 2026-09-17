@@ -112,7 +112,7 @@ claude  # then run /setup to complete registration and service setup
 
 | Repo | Description |
 |------|-------------|
-| [co3ntrol-rs](https://github.com/provocative-science/co3ntrol-rs) | Rust API backend: Modbus TCP to the Liquefaction Controller and BOP/DAC pod, HTTP API for the GUI and automation, telemetry to Alloy / Grafana Cloud |
+| [co3ntrol-rs](https://github.com/provocative-science/co3ntrol-rs) | Rust API backend: Modbus TCP to the Liquefaction Controller and BOP/DAC pod, HTTP API for the GUI and automation, telemetry to Alloy / Grafana Cloud and JSONL → Wasabi parquet |
 | [co3ntrol-gui](https://github.com/provocative-science/co3ntrol-gui) | Web GUI for liquefaction and BOP/DAC controls (uses **co3ntrol-rs**) |
 | [high-pressure-co2-plc](https://github.com/provocative-science/high-pressure-co2-plc) | Liquefaction Controller PLC firmware |
 | [riser-firmware](https://github.com/provocative-science/riser-firmware) | Riser firmware |
@@ -121,6 +121,6 @@ claude  # then run /setup to complete registration and service setup
 
 ### Planned
 
-- Postgres telemetry database monitoring for anomaly detection (legacy **co2ntrol** data)
+- Liquefaction parquet in the same Wasabi bucket (`host=lichost` expected) once that node is piped
 - Telegram group notifications when anomalies are detected
 

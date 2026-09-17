@@ -89,7 +89,7 @@ When the user asks about a plant warning, tower light, lock, interlock, or “th
 
 1. Read `plant-alerts/latest.md` first.
 2. If they mean an older event, scan the tail of `log.jsonl`.
-3. Use Grafana MCP to refresh live telemetry if the brief is stale.
+3. Use Grafana MCP for live Prom gauges, or **`mcp__telemetry__*`** for historical parquet snapshots, if the brief is stale.
 
 Do **not** assume the current chat’s Claude session transcript contains the alert — only Carbon Capture’s session does. Prefer the shared archive.
 
@@ -191,7 +191,51 @@ Grafana does **not** store raw telemetry itself. It **queries backends**:
 |-------------------------------------|----------------|-----------------------------------|
 | **Prometheus / Mimir** | Time-series **metrics** | **co3ntrol-rs** serves `GET /metrics` (Bearer auth) on loopback → **Alloy** scrapes → `remote_write` to Grafana Cloud Mimir. |
 | **Loki** | **Logs** | On some nodes Alloy tails log **files** (e.g. PLC console on lichost) → Loki push. co3ntrol-rs also writes JSONL locally at `/var/log/co3ntrol/control-telemetry.log` (not always in Loki). |
+| **Wasabi S3 parquet** | Full **JSON telemetry snapshots** + console logs | Same JSONL files (`control-telemetry.log`, `control-console.log`, `automation-console.log`) shipped to bucket **`provocative-dac-dev-beef`**. This is the archive for “what was the whole tick JSON at time T?” — Grafana Prom only has flattened gauges. |
 | **Tempo** | **Traces** | Not a primary signal today; prefer **metrics + logs** for incident analysis. |
+
+### Plant S3 archive (Wasabi) — `mcp__telemetry__*`
+
+Use these tools for **historical** airbed (and soon container-ship / liquefaction) telemetry, not the Pirateship Postgres `50-ton-dac` datasource.
+
+| Tool | Use |
+|------|-----|
+| `mcp__telemetry__list_streams` | See which `host=` prefixes exist and their date range |
+| `mcp__telemetry__list_objects` | List parquet keys for a day/range |
+| `mcp__telemetry__describe_schema` | Nested columns (`app.system.airbed.sensors.*`, …) |
+| `mcp__telemetry__query_range` | Time window + optional SELECT/WHERE (DuckDB) |
+| `mcp__telemetry__query_sql` | Raw read-only DuckDB SQL |
+
+**Key layout**
+
+```
+logs/{control|automation}/{telemetry|console}/host={host}/year=YYYY/month=MM/day=DD/{epoch}-{uuid}.parquet
+```
+
+- **Airbed (present now):** `host=airbed-host` (Grafana `subsystem="airbed"` / pirate-host). Alias `airbed` works.
+- **Container ship:** expected `host=bop-host` (aliases `container`, `container-ship`) — call `list_streams` before assuming it exists.
+- **Liquefaction:** expected `host=lichost` (aliases `liquefaction`, `liq`) — **not piped yet**.
+
+`control/telemetry` is parsed co3ntrol-rs tick JSON (`app` struct, ~1 Hz). `control/console` and `automation/console` are log lines (`timestamp`, `level`, `message`). Some tiny telemetry files are `kind=telemetry_unparsed` (raw blob) — `query_range` skips those by default.
+
+CAST `timestamp` to VARCHAR in SELECT (timestamp-tz export needs pytz, which is not in the container). Project a few columns; `SELECT *` on `app` is huge.
+
+```sql
+SELECT CAST(timestamp AS VARCHAR) AS ts,
+       app.system.airbed.sensors.buffer_tank_pressure AS buffer_psi,
+       app.supervisor.lock AS locked
+FROM read_parquet('s3://provocative-dac-dev-beef/logs/control/telemetry/host=airbed-host/year=2026/month=08/day=30/*.parquet', union_by_name=true)
+ORDER BY timestamp DESC
+LIMIT 20
+```
+
+Always pass `union_by_name=true` — parsed vs unparsed files do not share a schema.
+
+**When to use S3 vs Grafana**
+
+- **Live “is it up / current gauge?”** → Grafana Prom `co3ntrol_*` + `subsystem=`.
+- **History / nested JSON / console narrative** → S3 parquet via `mcp__telemetry__*`.
+- **Pirateship 50-ton ads/desorb** → still Postgres `50-ton-dac`, not this bucket.
 
 Pipeline (current, simplified):
 
@@ -333,6 +377,7 @@ Never invent stack URLs or tokens; humans rotate credentials in Grafana / `/etc/
 3. **Before declaring an outage**, verify you are not using deprecated `liquefaction_*` / `host_name` / `service.name` filters.
 4. **Empty Prometheus result** with correct schema = “no samples in range” (or hardware nulls omitted), not necessarily Alloy failure.
 5. If **Tempo** has little data, say so and use **metrics + logs**.
+6. For **historical airbed JSON / console logs**, use **`mcp__telemetry__*`** (Wasabi parquet). Call `list_streams` first. Liquefaction S3 is not piped yet; container-ship may appear as `bop-host`.
 
 *Update this section when the pipeline changes (`ALLOY_README.md`, `control/src/api/metrics.rs`).*
 
