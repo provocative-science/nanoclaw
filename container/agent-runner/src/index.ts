@@ -24,6 +24,7 @@ import {
   resolveDeliverableResult,
   stripInternalTags,
 } from './deliverable-result.js';
+import { queryThinkingOptions } from './thinking.js';
 
 interface ContainerInput {
   prompt: string;
@@ -484,6 +485,7 @@ async function runQuery(
       resume: sessionId,
       resumeSessionAt: resumeAt,
       ...(containerInput.model ? { model: containerInput.model } : {}),
+      ...queryThinkingOptions(containerInput.model),
       systemPrompt: globalClaudeMd
         ? { type: 'preset' as const, preset: 'claude_code' as const, append: globalClaudeMd }
         : undefined,
