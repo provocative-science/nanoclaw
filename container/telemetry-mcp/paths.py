@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+import os
 import re
 from datetime import date, datetime, timedelta, timezone
-from typing import Iterable
+from typing import Iterable, MutableMapping
 
 # Hive key: logs/{component}/{stream}/host={host}/year=YYYY/month=MM/day=DD/{file}.parquet
 KEY_RE = re.compile(
@@ -145,3 +146,30 @@ def s3_endpoint_host(endpoint: str) -> str:
     text = (endpoint or "").strip()
     text = re.sub(r"^https?://", "", text, flags=re.I)
     return text.rstrip("/")
+
+
+# OneCLI injects HTTP(S)_PROXY with userinfo (http://x:token@host:port). DuckDB
+# httpfs cannot parse that form ("Failed to parse http_proxy into a host and
+# port"), so parquet reads fail while boto3 listing still works. Wasabi is
+# reachable directly from agent containers, same as Notion MCP.
+PROXY_ENV_KEYS = (
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+)
+
+
+def strip_outbound_proxy(
+    env: MutableMapping[str, str] | None = None,
+) -> list[str]:
+    """Remove proxy env vars so DuckDB talks to Wasabi directly. Returns removed keys."""
+    target = os.environ if env is None else env
+    removed: list[str] = []
+    for key in PROXY_ENV_KEYS:
+        if key in target:
+            target.pop(key, None)
+            removed.append(key)
+    return removed

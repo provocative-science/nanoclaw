@@ -198,6 +198,15 @@ Grafana does **not** store raw telemetry itself. It **queries backends**:
 
 Use these tools for **historical** airbed (and soon container-ship / liquefaction) telemetry, not the Pirateship Postgres `50-ton-dac` datasource.
 
+If the tools are deferred, `ToolSearch` with `select:mcp__telemetry__list_streams,mcp__telemetry__query_range,mcp__telemetry__describe_schema` first. Then **read rows**, do not stop at inventory.
+
+When someone asks what is in S3 / whether you can see telemetry logs:
+
+1. `list_streams` — report hosts, date ranges, object counts.
+2. `query_range` on each **present** host (today: `airbed-host` `control/telemetry`) and quote a few timestamps + sensor fields.
+3. If a requested plant is missing from `list_streams` (container-ship / liquefaction), say that host is **not piped yet**. That is not “S3 is broken” and does not mean airbed is invisible.
+4. Grafana Prom empty for `subsystem="airbed"` is a **metrics** gap. Airbed JSON/console **is** in this bucket — do not wait for SSH to `/var/log/co3ntrol` on airbed-host.
+
 | Tool | Use |
 |------|-----|
 | `mcp__telemetry__list_streams` | See which `host=` prefixes exist and their date range |
@@ -377,7 +386,7 @@ Never invent stack URLs or tokens; humans rotate credentials in Grafana / `/etc/
 3. **Before declaring an outage**, verify you are not using deprecated `liquefaction_*` / `host_name` / `service.name` filters.
 4. **Empty Prometheus result** with correct schema = “no samples in range” (or hardware nulls omitted), not necessarily Alloy failure.
 5. If **Tempo** has little data, say so and use **metrics + logs**.
-6. For **historical airbed JSON / console logs**, use **`mcp__telemetry__*`** (Wasabi parquet). Call `list_streams` first. Liquefaction S3 is not piped yet; container-ship may appear as `bop-host`.
+6. For **historical airbed JSON / console logs**, use **`mcp__telemetry__*`** (Wasabi parquet). Call `list_streams`, then `query_range` — listing prefixes is not enough. Liquefaction S3 is not piped yet; container-ship may appear as `bop-host` once objects exist.
 
 *Update this section when the pipeline changes (`ALLOY_README.md`, `control/src/api/metrics.rs`).*
 

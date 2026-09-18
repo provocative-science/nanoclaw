@@ -57,7 +57,7 @@ Stdio MCP servers configured for groups read **`groups/{name}/.mcp.json`**. That
 
 **Grafana MCP:** the template uses the official `uvx mcp-grafana` invocation per Grafana docs. The **agent container image** installs `uv` / `uvx` (see `container/Dockerfile`) so that command works; wiring still comes from this envsubst pipeline and `loadGroupMcpServersFromDisk()` merging `groups/*/.mcp.json` into the SDK.
 
-**Plant telemetry MCP (Wasabi S3):** parquet dumps of co3ntrol-rs JSONL (`control-telemetry.log`) and console logs. The image ships `container/telemetry-mcp/server.py` (DuckDB + boto3). Credentials are `TELEMETRY_S3_*` in `secrets/mcp.env`. Tools are `mcp__telemetry__*` (`list_streams`, `query_range`, `query_sql`, …). Agent usage notes live in [`groups/global/CLAUDE.md`](groups/global/CLAUDE.md). Local Cursor: `scripts/run-telemetry-mcp.sh`.
+**Plant telemetry MCP (Wasabi S3):** parquet dumps of co3ntrol-rs JSONL (`control-telemetry.log`) and console logs. The image ships `container/telemetry-mcp/server.py` (DuckDB + boto3). Credentials are `TELEMETRY_S3_*` in `secrets/mcp.env`. The stdio wrapper **unsets `HTTP(S)_PROXY`** (same as Notion): DuckDB httpfs cannot parse OneCLI proxy URLs, so parquet `query_range` would fail while `list_streams` (boto3) still worked. Tools are `mcp__telemetry__*` (`list_streams`, `query_range`, `query_sql`, …). Agent usage notes live in [`groups/global/CLAUDE.md`](groups/global/CLAUDE.md). Local Cursor: `scripts/run-telemetry-mcp.sh`.
 
 **Observability (co3ntrol-rs / Grafana Cloud):** live Prom scrape → Alloy → Mimir/Loki, plus the S3 parquet archive, are documented for agents in [`groups/global/CLAUDE.md`](groups/global/CLAUDE.md) (mounted in containers as `/workspace/global/CLAUDE.md`).
 

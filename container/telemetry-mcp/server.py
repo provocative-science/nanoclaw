@@ -25,7 +25,11 @@ from paths import (
     parquet_s3_url,
     resolve_host,
     s3_endpoint_host,
+    strip_outbound_proxy,
 )
+
+# Must run before DuckDB httpfs / boto3 clients are created.
+strip_outbound_proxy()
 
 # Following Qodo rule: No Hardcoded Credentials — keys come from env (secrets/mcp.env).
 BUCKET = os.environ.get("TELEMETRY_S3_BUCKET", "provocative-dac-dev-beef")

@@ -19,8 +19,8 @@
     },
     "telemetry": {
       "type": "stdio",
-      "command": "python3",
-      "args": ["/app/telemetry-mcp/server.py"],
+      "command": "sh",
+      "args": ["-c", "unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy NODE_USE_ENV_PROXY && python3 /app/telemetry-mcp/server.py"],
       "env": {
         "TELEMETRY_S3_ACCESS_KEY": "${TELEMETRY_S3_ACCESS_KEY}",
         "TELEMETRY_S3_SECRET_KEY": "${TELEMETRY_S3_SECRET_KEY}",

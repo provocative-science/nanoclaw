@@ -14,6 +14,7 @@ from paths import (
     parse_timestamp,
     resolve_host,
     s3_endpoint_host,
+    strip_outbound_proxy,
 )
 
 
@@ -94,6 +95,20 @@ class SqlGuardTests(unittest.TestCase):
 
     def test_strips_comment(self):
         assert_read_only_sql("-- hi\nSELECT 1")
+
+
+class ProxyStripTests(unittest.TestCase):
+    def test_removes_onecli_style_proxy(self):
+        env = {
+            "HTTPS_PROXY": "http://x:token@127.0.0.1:10255",
+            "http_proxy": "http://x:token@127.0.0.1:10255",
+            "TELEMETRY_S3_BUCKET": "provocative-dac-dev-beef",
+        }
+        removed = strip_outbound_proxy(env)
+        self.assertIn("HTTPS_PROXY", removed)
+        self.assertIn("http_proxy", removed)
+        self.assertNotIn("HTTPS_PROXY", env)
+        self.assertEqual(env["TELEMETRY_S3_BUCKET"], "provocative-dac-dev-beef")
 
 
 class EndpointTests(unittest.TestCase):
