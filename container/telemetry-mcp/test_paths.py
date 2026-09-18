@@ -7,6 +7,7 @@ from datetime import date, datetime, timezone
 
 from paths import (
     assert_read_only_sql,
+    configured_buckets,
     day_range,
     glob_s3_url,
     hive_prefix,
@@ -45,6 +46,19 @@ class HiveKeyTests(unittest.TestCase):
         self.assertEqual(meta["stream"], "telemetry")
         self.assertEqual(meta["host"], "airbed-host")
         self.assertEqual(meta["day"], "30")
+        self.assertEqual(meta["layout"], "nested")
+
+    def test_parse_machine_layout(self):
+        key = (
+            "telemetry/machine=bop-host/year=2026/month=09/day=18/"
+            "1789765211-91848617-1d10-4df5-b5f5-ac26628219e2.parquet"
+        )
+        meta = parse_hive_key(key)
+        assert meta is not None
+        self.assertEqual(meta["layout"], "machine")
+        self.assertEqual(meta["host"], "bop-host")
+        self.assertEqual(meta["stream"], "telemetry")
+        self.assertEqual(meta["component"], "control")
 
     def test_prefix_and_glob(self):
         d = date(2026, 8, 30)
@@ -56,6 +70,10 @@ class HiveKeyTests(unittest.TestCase):
             glob_s3_url("provocative-dac-dev-beef", "control", "telemetry", "airbed-host", d).endswith(
                 "day=30/*.parquet"
             )
+        )
+        self.assertEqual(
+            hive_prefix("control", "telemetry", "bop-host", date(2026, 9, 18), layout="machine"),
+            "telemetry/machine=bop-host/year=2026/month=09/day=18/",
         )
 
 
@@ -109,6 +127,17 @@ class ProxyStripTests(unittest.TestCase):
         self.assertIn("http_proxy", removed)
         self.assertNotIn("HTTPS_PROXY", env)
         self.assertEqual(env["TELEMETRY_S3_BUCKET"], "provocative-dac-dev-beef")
+
+
+class BucketListTests(unittest.TestCase):
+    def test_extra_wins(self):
+        self.assertEqual(
+            configured_buckets("beef", "beef,a7f3"),
+            ["beef", "a7f3"],
+        )
+
+    def test_primary_only(self):
+        self.assertEqual(configured_buckets("beef", ""), ["beef"])
 
 
 class EndpointTests(unittest.TestCase):

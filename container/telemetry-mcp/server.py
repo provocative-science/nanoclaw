@@ -18,6 +18,7 @@ from mcp.server.fastmcp import FastMCP
 
 from paths import (
     assert_read_only_sql,
+    configured_buckets,
     day_range,
     hive_prefix,
     parse_hive_key,
@@ -32,7 +33,11 @@ from paths import (
 strip_outbound_proxy()
 
 # Following Qodo rule: No Hardcoded Credentials — keys come from env (secrets/mcp.env).
-BUCKET = os.environ.get("TELEMETRY_S3_BUCKET", "provocative-dac-dev-beef")
+BUCKETS = configured_buckets(
+    os.environ.get("TELEMETRY_S3_BUCKET", "provocative-dac-dev-beef"),
+    os.environ.get("TELEMETRY_S3_BUCKETS", ""),
+)
+BUCKET = BUCKETS[0]
 REGION = os.environ.get("TELEMETRY_S3_REGION", "us-east-1")
 ENDPOINT = os.environ.get(
     "TELEMETRY_S3_ENDPOINT", "https://s3.us-east-1.wasabisys.com"
@@ -93,18 +98,18 @@ def _json(payload: Any) -> str:
     return json.dumps(payload, default=str, ensure_ascii=False)
 
 
-def _prefixes(s3, prefix: str) -> list[str]:
+def _prefixes(s3, prefix: str, bucket: str) -> list[str]:
     out: list[str] = []
     paginator = s3.get_paginator("list_objects_v2")
-    for page in paginator.paginate(Bucket=BUCKET, Prefix=prefix, Delimiter="/"):
+    for page in paginator.paginate(Bucket=bucket, Prefix=prefix, Delimiter="/"):
         out.extend(p["Prefix"] for p in page.get("CommonPrefixes", []))
     return out
 
 
-def _list_keys(s3, prefix: str, limit: int) -> list[dict[str, Any]]:
+def _list_keys(s3, prefix: str, limit: int, bucket: str) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     paginator = s3.get_paginator("list_objects_v2")
-    for page in paginator.paginate(Bucket=BUCKET, Prefix=prefix):
+    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
         for obj in page.get("Contents", []) or []:
             out.append(
                 {
@@ -119,12 +124,19 @@ def _list_keys(s3, prefix: str, limit: int) -> list[dict[str, Any]]:
 
 
 def _keys_for_range(
-    s3, component: str, stream: str, host: str, start: datetime, end: datetime
+    s3,
+    component: str,
+    stream: str,
+    host: str,
+    start: datetime,
+    end: datetime,
+    bucket: str,
+    layout: str,
 ) -> list[str]:
     keys: list[str] = []
     for day in day_range(start, end):
-        prefix = hive_prefix(component, stream, host, day)
-        for item in _list_keys(s3, prefix, MAX_KEYS_PER_RANGE):
+        prefix = hive_prefix(component, stream, host, day, layout=layout)
+        for item in _list_keys(s3, prefix, MAX_KEYS_PER_RANGE, bucket):
             keys.append(item["key"])
             if len(keys) >= MAX_KEYS_PER_RANGE:
                 return keys
@@ -141,17 +153,19 @@ def _prefix_int(prefix: str, label: str) -> int:
         return -1
 
 
-def _latest_partition_day(s3, component: str, stream: str, host: str) -> date | None:
-    host_prefix = hive_prefix(component, stream, host)
-    years = _prefixes(s3, host_prefix)
+def _latest_partition_day(
+    s3, component: str, stream: str, host: str, bucket: str, layout: str
+) -> date | None:
+    host_prefix = hive_prefix(component, stream, host, layout=layout)
+    years = _prefixes(s3, host_prefix, bucket)
     if not years:
         return None
     year_p = max(years, key=lambda p: _prefix_int(p, "year"))
-    months = _prefixes(s3, year_p)
+    months = _prefixes(s3, year_p, bucket)
     if not months:
         return None
     month_p = max(months, key=lambda p: _prefix_int(p, "month"))
-    days = _prefixes(s3, month_p)
+    days = _prefixes(s3, month_p, bucket)
     if not days:
         return None
     day_p = max(days, key=lambda p: _prefix_int(p, "day"))
@@ -162,10 +176,10 @@ def _latest_partition_day(s3, component: str, stream: str, host: str) -> date | 
 
 
 def _default_range(
-    s3, component: str, stream: str, host: str
+    s3, component: str, stream: str, host: str, bucket: str, layout: str
 ) -> tuple[datetime, datetime]:
     """Prefer the newest day that has a substantial parquet; else latest partition."""
-    latest = _latest_partition_day(s3, component, stream, host)
+    latest = _latest_partition_day(s3, component, stream, host, bucket, layout)
     if latest is None:
         end = datetime.now(timezone.utc)
         return end - timedelta(days=2), end
@@ -173,13 +187,53 @@ def _default_range(
     chosen = latest
     for offset in range(0, 46):
         day = latest - timedelta(days=offset)
-        items = _list_keys(s3, hive_prefix(component, stream, host, day), 20)
+        items = _list_keys(
+            s3, hive_prefix(component, stream, host, day, layout=layout), 20, bucket
+        )
         if any(int(i["bytes"]) >= 50_000 for i in items):
             chosen = day
             break
     start = datetime(chosen.year, chosen.month, chosen.day, tzinfo=timezone.utc)
     end = start + timedelta(days=1) - timedelta(microseconds=1)
     return start, end
+
+
+def _stream_exists(
+    s3, bucket: str, layout: str, component: str, stream: str, host: str
+) -> bool:
+    prefix = hive_prefix(component, stream, host, layout=layout)
+    if _prefixes(s3, prefix, bucket):
+        return True
+    return bool(_list_keys(s3, prefix, 1, bucket))
+
+
+def _find_location(
+    s3, host: str, component: str, stream: str
+) -> dict[str, str] | None:
+    for bucket in BUCKETS:
+        for layout in ("nested", "machine"):
+            if _stream_exists(s3, bucket, layout, component, stream, host):
+                return {"bucket": bucket, "layout": layout}
+    return None
+
+
+def _summarize_prefix(s3, bucket: str, host_prefix: str) -> dict[str, Any]:
+    keys = _list_keys(s3, host_prefix, LIST_STREAM_KEY_CAP, bucket)
+    days: set[str] = set()
+    bytes_total = 0
+    for item in keys:
+        bytes_total += int(item["bytes"])
+        meta = parse_hive_key(item["key"])
+        if meta:
+            days.add(f"{meta['year']}-{meta['month']}-{meta['day']}")
+    return {
+        "objects": len(keys),
+        "capped": len(keys) >= LIST_STREAM_KEY_CAP,
+        "bytes": bytes_total,
+        "day_count": len(days),
+        "first_day": min(days) if days else None,
+        "last_day": max(days) if days else None,
+    }
 
 
 def _read_parquet_sql(urls: list[str]) -> str:
@@ -220,45 +274,49 @@ def _run_sql(sql: str, max_rows: int) -> dict[str, Any]:
 
 
 def _walk_hosts(s3) -> set[str]:
-    hosts: set[str] = set()
-    for component_prefix in _prefixes(s3, "logs/"):
-        for stream_prefix in _prefixes(s3, component_prefix):
-            for host_prefix in _prefixes(s3, stream_prefix):
-                host_seg = host_prefix[len(stream_prefix) :].strip("/")
-                host = host_seg.split("=", 1)[-1] if "=" in host_seg else host_seg
-                if host:
-                    hosts.add(host)
-    return hosts
+    return {row["host"] for row in _inventory(s3)}
 
 
 def _inventory(s3) -> list[dict[str, Any]]:
     streams: list[dict[str, Any]] = []
-    for component_prefix in _prefixes(s3, "logs/"):
-        component = component_prefix[len("logs/") :].strip("/")
-        for stream_prefix in _prefixes(s3, component_prefix):
-            stream = stream_prefix[len(component_prefix) :].strip("/")
-            for host_prefix in _prefixes(s3, stream_prefix):
-                host_seg = host_prefix[len(stream_prefix) :].strip("/")
-                host = host_seg.split("=", 1)[-1] if "=" in host_seg else host_seg
-                keys = _list_keys(s3, host_prefix, LIST_STREAM_KEY_CAP)
-                days: set[str] = set()
-                bytes_total = 0
-                for item in keys:
-                    bytes_total += int(item["bytes"])
-                    meta = parse_hive_key(item["key"])
-                    if meta:
-                        days.add(f"{meta['year']}-{meta['month']}-{meta['day']}")
+    for bucket in BUCKETS:
+        for component_prefix in _prefixes(s3, "logs/", bucket):
+            component = component_prefix[len("logs/") :].strip("/")
+            if component.startswith("machine="):
+                continue
+            for stream_prefix in _prefixes(s3, component_prefix, bucket):
+                stream = stream_prefix[len(component_prefix) :].strip("/")
+                for host_prefix in _prefixes(s3, stream_prefix, bucket):
+                    host_seg = host_prefix[len(stream_prefix) :].strip("/")
+                    host = host_seg.split("=", 1)[-1] if "=" in host_seg else host_seg
+                    if not host:
+                        continue
+                    streams.append(
+                        {
+                            "bucket": bucket,
+                            "layout": "nested",
+                            "component": component,
+                            "stream": stream,
+                            "host": host,
+                            **_summarize_prefix(s3, bucket, host_prefix),
+                        }
+                    )
+        for root, stream in (("telemetry/", "telemetry"), ("logs/", "console")):
+            for host_prefix in _prefixes(s3, root, bucket):
+                host_seg = host_prefix[len(root) :].strip("/")
+                if not host_seg.startswith("machine="):
+                    continue
+                host = host_seg.split("=", 1)[-1]
+                if not host:
+                    continue
                 streams.append(
                     {
-                        "component": component,
+                        "bucket": bucket,
+                        "layout": "machine",
+                        "component": "control",
                         "stream": stream,
                         "host": host,
-                        "objects": len(keys),
-                        "capped": len(keys) >= LIST_STREAM_KEY_CAP,
-                        "bytes": bytes_total,
-                        "day_count": len(days),
-                        "first_day": min(days) if days else None,
-                        "last_day": max(days) if days else None,
+                        **_summarize_prefix(s3, bucket, host_prefix),
                     }
                 )
     return streams
@@ -266,24 +324,25 @@ def _inventory(s3) -> list[dict[str, Any]]:
 
 @mcp.tool()
 def list_streams() -> str:
-    """List parquet streams in the plant telemetry bucket.
+    """List parquet streams across configured plant telemetry buckets.
 
-    Keys look like logs/{component}/{stream}/host={host}/year=YYYY/month=MM/day=DD/*.parquet.
-    component is usually control or automation; stream is telemetry (JSON snapshots)
-    or console (log lines). Call this first to see which hosts are present.
-    Airbed is host=airbed-host today. Container-ship and liquefaction prefixes will
-    appear when those nodes are piped in — do not assume they exist yet.
+    Two hive layouts:
+      nested (airbed / beef): logs/{control|automation}/{telemetry|console}/host={host}/...
+      machine (container-ship / a7f3): telemetry/machine={host}/... and logs/machine={host}/...
+    Call this first. Container-ship is host=bop-host in provocative-dac-dev-a7f3.
+    Airbed JSON is host=airbed-host in provocative-dac-dev-beef. Liquefaction (lichost)
+    is not piped yet.
     """
     try:
         streams = _inventory(_s3())
         return _json(
             {
-                "bucket": BUCKET,
+                "buckets": BUCKETS,
                 "endpoint": ENDPOINT,
                 "streams": streams,
                 "aliases": {
                     "airbed": "airbed-host",
-                    "container / container-ship / bop": "bop-host (expected)",
+                    "container / container-ship / bop": "bop-host",
                     "liquefaction / liq": "lichost (expected, not piped yet)",
                 },
             }
@@ -308,16 +367,34 @@ def list_objects(
     try:
         s3 = _s3()
         host_id = resolve_host(host, _walk_hosts(s3))
+        loc = _find_location(s3, host_id, component, stream)
+        if loc is None:
+            return _json(
+                {
+                    "error": "no objects for that host/stream",
+                    "host": host_id,
+                    "component": component,
+                    "stream": stream,
+                    "buckets": BUCKETS,
+                }
+            )
+        bucket, layout = loc["bucket"], loc["layout"]
         if start or end:
             now = datetime.now(timezone.utc)
             start_dt = parse_timestamp(start) if start else now - timedelta(days=2)
             end_dt = parse_timestamp(end) if end else now
         else:
-            start_dt, end_dt = _default_range(s3, component, stream, host_id)
-        keys = _keys_for_range(s3, component, stream, host_id, start_dt, end_dt)
+            start_dt, end_dt = _default_range(
+                s3, component, stream, host_id, bucket, layout
+            )
+        keys = _keys_for_range(
+            s3, component, stream, host_id, start_dt, end_dt, bucket, layout
+        )
         cap = min(max(1, limit), 200)
         return _json(
             {
+                "bucket": bucket,
+                "layout": layout,
                 "host": host_id,
                 "component": component,
                 "stream": stream,
@@ -341,32 +418,53 @@ def describe_schema(
     """Describe columns of one parquet file for a stream (nested structs included).
 
     Telemetry files expose an `app` struct matching co3ntrol-rs JSON
-    (app.system.airbed.sensors.*, app.supervisor.lock, …). Console files have
-    timestamp, level, message. Some early/broken files are kind=telemetry_unparsed
-    with a raw message blob — skip those and pick another day if DESCRIBE looks empty.
+    (app.system.airbed.sensors.*, app.system.bop.sensors.*, app.supervisor.lock, …).
+    Console files have timestamp, level, message. Some early/broken files are
+    kind=telemetry_unparsed with a raw message blob — skip those and pick another day
+    if DESCRIBE looks empty.
     """
     try:
         s3 = _s3()
         host_id = resolve_host(host, _walk_hosts(s3))
+        loc = _find_location(s3, host_id, component, stream)
+        if loc is None:
+            return _json(
+                {
+                    "error": "no objects for that host/stream",
+                    "host": host_id,
+                    "component": component,
+                    "stream": stream,
+                    "buckets": BUCKETS,
+                }
+            )
+        bucket, layout = loc["bucket"], loc["layout"]
         if day:
             d = parse_timestamp(day)
-            prefix = hive_prefix(component, stream, host_id, d.date())
+            prefix = hive_prefix(component, stream, host_id, d.date(), layout=layout)
         else:
-            prefix = hive_prefix(component, stream, host_id)
-        items = _list_keys(s3, prefix, 40)
+            prefix = hive_prefix(component, stream, host_id, layout=layout)
+        items = _list_keys(s3, prefix, 40, bucket)
         if not items:
-            return _json({"error": "no objects for that prefix", "prefix": prefix})
+            return _json({"error": "no objects for that prefix", "prefix": prefix, "bucket": bucket})
         # Prefer a larger file — tiny ones are often unparsed stubs.
         items.sort(key=lambda o: o["bytes"], reverse=True)
         key = items[0]["key"]
-        url = parquet_s3_url(BUCKET, key)
+        url = parquet_s3_url(bucket, key)
         with _lock:
             con = _conn()
             _configure_duck(con)
             rel = con.execute(f"DESCRIBE SELECT * FROM read_parquet('{url}')")
             cols = [d[0] for d in rel.description] if rel.description else []
             rows = [dict(zip(cols, r)) for r in rel.fetchall()]
-        return _json({"key": key, "bytes": items[0]["bytes"], "columns": rows})
+        return _json(
+            {
+                "bucket": bucket,
+                "layout": layout,
+                "key": key,
+                "bytes": items[0]["bytes"],
+                "columns": rows,
+            }
+        )
     except Exception as exc:
         return _json({"error": str(exc)})
 
@@ -385,10 +483,11 @@ def query_range(
     """Query parquet for a host/stream over a time range (DuckDB).
 
     Default SELECT for telemetry:
-      CAST(timestamp AS VARCHAR) AS ts, host, kind, app.supervisor.lock AS locked
+      CAST(timestamp AS VARCHAR) AS ts, host-or-machine AS host, kind, app.supervisor.lock AS locked
     Default SELECT for console:
       CAST(timestamp AS VARCHAR) AS ts, level, message
     Pass select_sql to pull sensors, e.g.
+      CAST(timestamp AS VARCHAR) AS ts, app.system.bop.sensors.co2_accumulator_dry_pressure AS accum_psi
       CAST(timestamp AS VARCHAR) AS ts, app.system.airbed.sensors.buffer_tank_pressure AS buffer_psi
     where_sql is a raw predicate without the WHERE keyword.
     Always CAST timestamp to VARCHAR (timestamp tz needs pytz which is not installed).
@@ -397,16 +496,34 @@ def query_range(
     try:
         s3 = _s3()
         host_id = resolve_host(host, _walk_hosts(s3))
+        loc = _find_location(s3, host_id, component, stream)
+        if loc is None:
+            return _json(
+                {
+                    "error": "no objects for that host/stream — call list_streams",
+                    "host": host_id,
+                    "component": component,
+                    "stream": stream,
+                    "buckets": BUCKETS,
+                }
+            )
+        bucket, layout = loc["bucket"], loc["layout"]
         if start or end:
             now = datetime.now(timezone.utc)
             start_dt = parse_timestamp(start) if start else now - timedelta(hours=6)
             end_dt = parse_timestamp(end) if end else now
         else:
-            start_dt, end_dt = _default_range(s3, component, stream, host_id)
-        keys = _keys_for_range(s3, component, stream, host_id, start_dt, end_dt)
+            start_dt, end_dt = _default_range(
+                s3, component, stream, host_id, bucket, layout
+            )
+        keys = _keys_for_range(
+            s3, component, stream, host_id, start_dt, end_dt, bucket, layout
+        )
         if not keys:
             return _json(
                 {
+                    "bucket": bucket,
+                    "layout": layout,
                     "host": host_id,
                     "component": component,
                     "stream": stream,
@@ -417,12 +534,17 @@ def query_range(
                     "note": "no parquet objects in range — call list_streams / list_objects",
                 }
             )
-        urls = [parquet_s3_url(BUCKET, k) for k in keys]
+        urls = [parquet_s3_url(bucket, k) for k in keys]
         from_sql = _read_parquet_sql(urls)
         if select_sql.strip():
             select_clause = select_sql.strip()
         elif stream == "console":
             select_clause = "CAST(timestamp AS VARCHAR) AS ts, level, message"
+        elif layout == "machine":
+            select_clause = (
+                "CAST(timestamp AS VARCHAR) AS ts, machine AS host, kind, "
+                "app.supervisor.lock AS locked"
+            )
         else:
             select_clause = (
                 "CAST(timestamp AS VARCHAR) AS ts, host, kind, "
@@ -444,6 +566,8 @@ def query_range(
         payload = _run_sql(sql, limit)
         payload.update(
             {
+                "bucket": bucket,
+                "layout": layout,
                 "host": host_id,
                 "component": component,
                 "stream": stream,
@@ -459,15 +583,17 @@ def query_range(
 
 @mcp.tool()
 def query_sql(sql: str, limit: int = 100) -> str:
-    """Run a read-only DuckDB SELECT against the plant bucket.
+    """Run a read-only DuckDB SELECT against the plant buckets.
 
     Parquet URLs:
       s3://provocative-dac-dev-beef/logs/control/telemetry/host=airbed-host/year=2026/month=08/day=30/*.parquet
+      s3://provocative-dac-dev-a7f3/telemetry/machine=bop-host/year=2026/month=09/day=18/*.parquet
     Always pass union_by_name=true (schemas differ: parsed telemetry vs telemetry_unparsed).
-    Example:
+    Example (container ship):
       SELECT CAST(timestamp AS VARCHAR) AS ts,
-             app.system.airbed.sensors.buffer_tank_pressure AS buffer_psi
-      FROM read_parquet('s3://provocative-dac-dev-beef/logs/control/telemetry/host=airbed-host/year=2026/month=08/day=30/*.parquet', union_by_name=true)
+             app.system.bop.sensors.co2_accumulator_dry_pressure AS accum_psi,
+             app.system.bop.sensors.product_supply_gas_out_flow AS slpm_out
+      FROM read_parquet('s3://provocative-dac-dev-a7f3/telemetry/machine=bop-host/year=2026/month=09/day=18/*.parquet', union_by_name=true)
       ORDER BY timestamp DESC
       LIMIT 20
     Only SELECT/WITH/DESCRIBE/SHOW/EXPLAIN/FROM are allowed. S3 credentials are injected

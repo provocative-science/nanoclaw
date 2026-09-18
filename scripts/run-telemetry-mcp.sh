@@ -22,8 +22,9 @@ set +a
 : "${TELEMETRY_S3_REGION:=us-east-1}"
 : "${TELEMETRY_S3_ENDPOINT:=https://s3.us-east-1.wasabisys.com}"
 : "${TELEMETRY_S3_BUCKET:=provocative-dac-dev-beef}"
+: "${TELEMETRY_S3_BUCKETS:=provocative-dac-dev-beef,provocative-dac-dev-a7f3}"
 
-export TELEMETRY_S3_ACCESS_KEY TELEMETRY_S3_SECRET_KEY TELEMETRY_S3_REGION TELEMETRY_S3_ENDPOINT TELEMETRY_S3_BUCKET
+export TELEMETRY_S3_ACCESS_KEY TELEMETRY_S3_SECRET_KEY TELEMETRY_S3_REGION TELEMETRY_S3_ENDPOINT TELEMETRY_S3_BUCKET TELEMETRY_S3_BUCKETS
 unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy NODE_USE_ENV_PROXY || true
 
 if command -v uvx >/dev/null 2>&1; then

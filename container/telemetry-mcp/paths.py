@@ -7,9 +7,14 @@ import re
 from datetime import date, datetime, timedelta, timezone
 from typing import Iterable, MutableMapping
 
-# Hive key: logs/{component}/{stream}/host={host}/year=YYYY/month=MM/day=DD/{file}.parquet
+# Hive key (airbed / beef): logs/{component}/{stream}/host={host}/year=/month=/day=/
 KEY_RE = re.compile(
     r"^logs/(?P<component>[^/]+)/(?P<stream>[^/]+)/host=(?P<host>[^/]+)"
+    r"/year=(?P<year>\d+)/month=(?P<month>\d+)/day=(?P<day>\d+)/"
+)
+# Hive key (container-ship / a7f3): {telemetry|logs}/machine={host}/year=/month=/day=/
+KEY_RE_MACHINE = re.compile(
+    r"^(?P<root>telemetry|logs)/machine=(?P<host>[^/]+)"
     r"/year=(?P<year>\d+)/month=(?P<month>\d+)/day=(?P<day>\d+)/"
 )
 
@@ -66,9 +71,46 @@ def resolve_host(name: str, known_hosts: Iterable[str] | None = None) -> str:
 
 def parse_hive_key(key: str) -> dict[str, str] | None:
     match = KEY_RE.match(key)
+    if match:
+        meta = match.groupdict()
+        meta["layout"] = "nested"
+        return meta
+    match = KEY_RE_MACHINE.match(key)
     if not match:
         return None
-    return match.groupdict()
+    meta = match.groupdict()
+    root = meta.pop("root")
+    meta["layout"] = "machine"
+    meta["component"] = "control"
+    meta["stream"] = "telemetry" if root == "telemetry" else "console"
+    return meta
+
+
+def configured_buckets(primary: str | None, extra: str | None = None) -> list[str]:
+    """TELEMETRY_S3_BUCKETS (comma-separated) wins; else TELEMETRY_S3_BUCKET."""
+    extra_list = [b.strip() for b in (extra or "").split(",") if b.strip()]
+    if extra_list:
+        # preserve order, drop dupes
+        return list(dict.fromkeys(extra_list))
+    name = (primary or "").strip() or "provocative-dac-dev-beef"
+    return [name]
+
+
+def hive_prefix(
+    component: str,
+    stream: str,
+    host: str,
+    day: date | None = None,
+    layout: str = "nested",
+) -> str:
+    if layout == "machine":
+        root = "telemetry" if stream == "telemetry" else "logs"
+        base = f"{root}/machine={host}/"
+    else:
+        base = f"logs/{component}/{stream}/host={host}/"
+    if day is None:
+        return base
+    return f"{base}year={day.year:04d}/month={day.month:02d}/day={day.day:02d}/"
 
 
 def parse_timestamp(value: str) -> datetime:
@@ -104,20 +146,20 @@ def day_range(start: datetime, end: datetime) -> list[date]:
     return days
 
 
-def hive_prefix(component: str, stream: str, host: str, day: date | None = None) -> str:
-    base = f"logs/{component}/{stream}/host={host}/"
-    if day is None:
-        return base
-    return f"{base}year={day.year:04d}/month={day.month:02d}/day={day.day:02d}/"
-
-
 def parquet_s3_url(bucket: str, key: str) -> str:
     return f"s3://{bucket}/{key}"
 
 
-def glob_s3_url(bucket: str, component: str, stream: str, host: str, day: date) -> str:
+def glob_s3_url(
+    bucket: str,
+    component: str,
+    stream: str,
+    host: str,
+    day: date,
+    layout: str = "nested",
+) -> str:
     return (
-        f"s3://{bucket}/{hive_prefix(component, stream, host, day)}*.parquet"
+        f"s3://{bucket}/{hive_prefix(component, stream, host, day, layout=layout)}*.parquet"
     )
 
 
