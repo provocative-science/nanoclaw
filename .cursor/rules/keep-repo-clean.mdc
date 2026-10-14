@@ -7,8 +7,8 @@ alwaysApply: true
 
 After finishing implementation work in this project (features, fixes, docs, config):
 
-1. **Stage and commit** all intentional project changes unless the user said not to commit.
-2. **Push** to the tracked remote branch when the user asked to push, or when wrapping up a session they asked to keep clean/synced.
+1. **Stage and commit** all intentional project changes unless the user said not to commit. This includes **pre-existing uncommitted work** found in the tree at the start of a task: review it, group it into coherent commits (finish or clearly scope any half-done edits), and commit it too — do not leave it behind.
+2. **Always push** to the tracked remote branch (`git push origin main`) after committing, unless the user explicitly said not to push. The remote is the source of truth for the bob49 deployment; unpushed local commits are considered lost work.
 3. **Do not leave** unrelated leftovers: untracked build artifacts, `__pycache__`, local secrets, or half-finished edits that belong in the same change.
 4. **Never commit secrets** (`secrets/*.env`, tokens, credentials). Commit `*.env.example` only.
 5. Prefer **one coherent commit** (or a small clear series) over a dirty tree at end of turn.
