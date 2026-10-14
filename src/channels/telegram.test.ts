@@ -40,8 +40,10 @@ const botRef = vi.hoisted(() => ({ current: null as any }));
 vi.mock('grammy', () => ({
   InputFile: class MockInputFile {
     readonly path: string;
-    constructor(p: string) {
+    readonly filename?: string;
+    constructor(p: string, filename?: string) {
       this.path = p;
+      this.filename = filename;
     }
   },
   Bot: class MockBot {
@@ -53,6 +55,7 @@ vi.mock('grammy', () => ({
     api = {
       sendMessage: vi.fn().mockResolvedValue(undefined),
       sendPhoto: vi.fn().mockResolvedValue(undefined),
+      sendDocument: vi.fn().mockResolvedValue(undefined),
       sendChatAction: vi.fn().mockResolvedValue(undefined),
       getFile: vi.fn().mockResolvedValue({ file_path: 'photos/file_0.jpg' }),
     };
@@ -1060,6 +1063,82 @@ describe('TelegramChannel', () => {
         expect.objectContaining({ path: '/tmp/a.jpg' }),
         { message_thread_id: 7 },
       );
+    });
+  });
+
+  describe('sendDocument', () => {
+    it('uploads the host file with thread id and caption', async () => {
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      await channel.sendDocument(
+        'tg:100200300',
+        '/tmp/report.md',
+        'Weekly report',
+        '42',
+      );
+
+      expect(currentBot().api.sendDocument).toHaveBeenCalledWith(
+        '100200300',
+        expect.objectContaining({
+          path: '/tmp/report.md',
+          filename: undefined,
+        }),
+        { message_thread_id: 42, caption: 'Weekly report' },
+      );
+    });
+
+    it('passes a display filename through InputFile', async () => {
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      await channel.sendDocument(
+        'tg:100200300',
+        '/tmp/abc123.md',
+        undefined,
+        undefined,
+        'summary.md',
+      );
+
+      expect(currentBot().api.sendDocument).toHaveBeenCalledWith(
+        '100200300',
+        expect.objectContaining({
+          path: '/tmp/abc123.md',
+          filename: 'summary.md',
+        }),
+        {},
+      );
+    });
+
+    it('truncates captions over 1024 characters', async () => {
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      await channel.sendDocument(
+        'tg:100200300',
+        '/tmp/x.csv',
+        'z'.repeat(1100),
+      );
+
+      expect(currentBot().api.sendDocument).toHaveBeenCalledWith(
+        '100200300',
+        expect.anything(),
+        { caption: 'z'.repeat(1024) },
+      );
+    });
+
+    it('logs but does not throw when the API rejects', async () => {
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+      currentBot().api.sendDocument.mockRejectedValueOnce(new Error('boom'));
+
+      await expect(
+        channel.sendDocument('tg:100200300', '/tmp/x.csv', undefined),
+      ).resolves.toBeUndefined();
     });
   });
 

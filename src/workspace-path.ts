@@ -18,6 +18,21 @@ export function isWorkspaceImageFilename(filePath: string): boolean {
   return IMAGE_EXT_RE.test(base);
 }
 
+/** Which outbound payload the resolved path is for. */
+export type WorkspaceSendKind = 'image' | 'file';
+
+/**
+ * Generic file sends (`send_file`) accept any extension, but refuse dotfiles
+ * and anything under a dot-directory (`.mcp.json`, `.env`, `.git/…`) so an
+ * agent cannot ship rendered secrets or VCS internals out of the workspace.
+ */
+export function isSendableWorkspaceFilename(containerPath: string): boolean {
+  const normalized = containerPath.replace(/\\/g, '/');
+  const segments = normalized.split('/').filter((s) => s.length > 0);
+  if (segments.length === 0) return false;
+  return segments.every((s) => !s.startsWith('.'));
+}
+
 function isUnderDirectory(baseReal: string, candidateReal: string): boolean {
   const rel = path.relative(baseReal, candidateReal);
   return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
@@ -34,18 +49,23 @@ function unsafePath(p: string): boolean {
 /**
  * Map a path as seen inside the agent container to an absolute host path.
  * Returns null if the path is not allowed, escapes a mount, or does not exist.
+ *
+ * `kind` selects the filename policy: `'image'` (default) only accepts raster
+ * image extensions; `'file'` accepts any extension except dotfiles.
  */
 export function resolveContainerWorkspacePathToHost(
   containerPath: string,
   groupFolder: string,
   isMain: boolean,
   group: RegisteredGroup | undefined,
+  kind: WorkspaceSendKind = 'image',
 ): string | null {
   const raw = containerPath.trim();
   if (unsafePath(raw)) return null;
 
   const normalized = path.posix.normalize(raw.replace(/\\/g, '/'));
   if (unsafePath(normalized)) return null;
+  if (kind === 'file' && !isSendableWorkspaceFilename(normalized)) return null;
 
   let groupDirReal: string;
   let projectRootReal: string;
@@ -177,7 +197,10 @@ export function resolveContainerWorkspacePathToHost(
   }
   if (!st.isFile()) return null;
 
-  if (!isWorkspaceImageFilename(real)) return null;
+  if (kind === 'image' && !isWorkspaceImageFilename(real)) return null;
+  // Re-check on the resolved host path so a symlink can't smuggle a dotfile.
+  if (kind === 'file' && !isSendableWorkspaceFilename(path.basename(real)))
+    return null;
 
   return real;
 }

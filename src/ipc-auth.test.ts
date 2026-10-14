@@ -8,7 +8,7 @@ import {
   getTaskById,
   setRegisteredGroup,
 } from './db.js';
-import { processTaskIpc, IpcDeps } from './ipc.js';
+import { processTaskIpc, sanitizeOutboundFilename, IpcDeps } from './ipc.js';
 import { RegisteredGroup } from './types.js';
 
 // Set up registered groups used across tests
@@ -732,5 +732,28 @@ describe('register_group success', () => {
     );
 
     expect(getRegisteredGroup('partial@g.us')).toBeUndefined();
+  });
+});
+
+describe('sanitizeOutboundFilename (send_file display name)', () => {
+  it('keeps plain names and strips directories', () => {
+    expect(sanitizeOutboundFilename('summary.md')).toBe('summary.md');
+    expect(sanitizeOutboundFilename('/etc/passwd')).toBe('passwd');
+    expect(sanitizeOutboundFilename('..\\..\\evil.txt')).toBe('evil.txt');
+    expect(sanitizeOutboundFilename('  padded.csv ')).toBe('padded.csv');
+  });
+
+  it('returns undefined for unusable values', () => {
+    expect(sanitizeOutboundFilename(undefined)).toBeUndefined();
+    expect(sanitizeOutboundFilename(42)).toBeUndefined();
+    expect(sanitizeOutboundFilename('')).toBeUndefined();
+    expect(sanitizeOutboundFilename('..')).toBeUndefined();
+    expect(sanitizeOutboundFilename('.env')).toBeUndefined();
+    expect(sanitizeOutboundFilename('bad\nname.txt')).toBeUndefined();
+  });
+
+  it('caps very long names', () => {
+    const long = 'a'.repeat(400) + '.md';
+    expect(sanitizeOutboundFilename(long)!.length).toBe(255);
   });
 });

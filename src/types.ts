@@ -103,6 +103,18 @@ export interface Channel {
     caption: string | undefined,
     threadId?: string,
   ): Promise<void>;
+  /**
+   * Send an arbitrary file (document) from an existing host file, e.g. a
+   * markdown report or CSV the agent wrote. Optional; only Telegram implements
+   * this today. `filename` overrides the display name shown to the recipient.
+   */
+  sendDocument?(
+    jid: string,
+    hostFilePath: string,
+    caption: string | undefined,
+    threadId?: string,
+    filename?: string,
+  ): Promise<void>;
   isConnected(): boolean;
   ownsJid(jid: string): boolean;
   disconnect(): Promise<void>;

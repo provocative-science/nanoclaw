@@ -934,6 +934,26 @@ async function main(): Promise<void> {
       }
       await channel.sendPhoto(jid, hostFilePath, caption, threadId);
     },
+    sendDocument: async (
+      jid: string,
+      hostFilePath: string,
+      caption: string | undefined,
+      threadId?: string,
+      filename?: string,
+    ) => {
+      const channel = findChannel(channels, jid);
+      if (!channel?.sendDocument) {
+        logger.warn({ jid }, 'No channel sendDocument support for JID');
+        return;
+      }
+      await channel.sendDocument(
+        jid,
+        hostFilePath,
+        caption,
+        threadId,
+        filename,
+      );
+    },
     registeredGroups: () => registeredGroups,
     registerGroup,
     syncGroups: async (force: boolean) => {

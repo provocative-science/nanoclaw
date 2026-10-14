@@ -458,6 +458,54 @@ export class TelegramChannel implements Channel {
     }
   }
 
+  async sendDocument(
+    jid: string,
+    hostFilePath: string,
+    caption: string | undefined,
+    threadId?: string,
+    filename?: string,
+  ): Promise<void> {
+    if (!this.bot) {
+      logger.warn('Telegram bot not initialized');
+      return;
+    }
+
+    try {
+      const numericId = jid.replace(/^tg:/, '');
+      const options: {
+        message_thread_id?: number;
+        caption?: string;
+      } = {};
+      if (threadId) {
+        options.message_thread_id = parseInt(threadId, 10);
+      }
+      if (caption) {
+        options.caption = caption.slice(0, TelegramChannel.CAPTION_MAX);
+      }
+
+      // grammY uses the InputFile name as the document's display filename.
+      const file = filename
+        ? new InputFile(hostFilePath, filename)
+        : new InputFile(hostFilePath);
+      await this.bot.api.sendDocument(numericId, file, { ...options });
+      logger.info(
+        {
+          jid,
+          hostFilePath,
+          filename,
+          threadId,
+          hasCaption: Boolean(caption),
+        },
+        'Telegram document sent',
+      );
+    } catch (err) {
+      logger.error(
+        { jid, hostFilePath, err },
+        'Failed to send Telegram document',
+      );
+    }
+  }
+
   isConnected(): boolean {
     return this.bot !== null;
   }
