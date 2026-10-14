@@ -16,6 +16,10 @@ import {
   OnInboundMessage,
   RegisteredGroup,
 } from '../types.js';
+import {
+  isTelegramMarkdownParseError,
+  withTelegramRetry,
+} from './telegram-retry.js';
 
 export interface TelegramChannelOpts {
   onMessage: OnInboundMessage;
@@ -28,6 +32,9 @@ export interface TelegramChannelOpts {
  * Send a message with Telegram Markdown parse mode, falling back to plain text.
  * Claude's output naturally matches Telegram's Markdown v1 format:
  *   *bold*, _italic_, `code`, ```code blocks```, [links](url)
+ *
+ * Transient errors (429/5xx) are rethrown so the outer retry loop can wait —
+ * they must not trigger an immediate plain-text resend.
  */
 async function sendTelegramMessage(
   api: { sendMessage: Api['sendMessage'] },
@@ -41,7 +48,9 @@ async function sendTelegramMessage(
       parse_mode: 'Markdown',
     });
   } catch (err) {
-    // Fallback: send as plain text if Markdown parsing fails
+    if (!isTelegramMarkdownParseError(err)) {
+      throw err;
+    }
     logger.debug({ err }, 'Markdown send failed, falling back to plain text');
     await api.sendMessage(chatId, text, options);
   }
@@ -398,16 +407,17 @@ export class TelegramChannel implements Channel {
 
       // Telegram has a 4096 character limit per message — split if needed
       const MAX_LENGTH = 4096;
+      const api = this.bot.api;
+      const sendChunk = (chunk: string) =>
+        withTelegramRetry(
+          () => sendTelegramMessage(api, numericId, chunk, options),
+          { label: 'sendMessage' },
+        );
       if (text.length <= MAX_LENGTH) {
-        await sendTelegramMessage(this.bot.api, numericId, text, options);
+        await sendChunk(text);
       } else {
         for (let i = 0; i < text.length; i += MAX_LENGTH) {
-          await sendTelegramMessage(
-            this.bot.api,
-            numericId,
-            text.slice(i, i + MAX_LENGTH),
-            options,
-          );
+          await sendChunk(text.slice(i, i + MAX_LENGTH));
         }
       }
       logger.info(
@@ -446,9 +456,14 @@ export class TelegramChannel implements Channel {
         options.caption = caption.slice(0, TelegramChannel.CAPTION_MAX);
       }
 
-      await this.bot.api.sendPhoto(numericId, new InputFile(hostFilePath), {
-        ...options,
-      });
+      const api = this.bot.api;
+      await withTelegramRetry(
+        () =>
+          api.sendPhoto(numericId, new InputFile(hostFilePath), {
+            ...options,
+          }),
+        { label: 'sendPhoto' },
+      );
       logger.info(
         { jid, hostFilePath, threadId, hasCaption: Boolean(caption) },
         'Telegram photo sent',
@@ -487,7 +502,11 @@ export class TelegramChannel implements Channel {
       const file = filename
         ? new InputFile(hostFilePath, filename)
         : new InputFile(hostFilePath);
-      await this.bot.api.sendDocument(numericId, file, { ...options });
+      const api = this.bot.api;
+      await withTelegramRetry(
+        () => api.sendDocument(numericId, file, { ...options }),
+        { label: 'sendDocument' },
+      );
       logger.info(
         {
           jid,
