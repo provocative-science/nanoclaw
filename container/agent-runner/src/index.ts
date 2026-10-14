@@ -6,6 +6,7 @@
  *   Stdin: Full ContainerInput JSON (read until EOF, like before)
  *   IPC:   Follow-up messages written as JSON files to /workspace/ipc/input/
  *          Files: {type:"message", text:"..."}.json — polled and consumed
+ *          git_pull_result_*.json is left in place for the agent to read
  *          Sentinel: /workspace/ipc/input/_close — signals session end
  *
  * Stdout protocol:
@@ -24,6 +25,7 @@ import {
   resolveDeliverableResult,
   stripInternalTags,
 } from './deliverable-result.js';
+import { queryThinkingOptions } from './thinking.js';
 
 interface ContainerInput {
   prompt: string;
@@ -279,8 +281,14 @@ function shouldClose(): boolean {
   return false;
 }
 
+/** Host git_pull writes these beside chat messages; the agent reads them itself. */
+function isGitPullResultFile(filename: string, data: { type?: unknown } | null): boolean {
+  return filename.startsWith('git_pull_result_') || data?.type === 'git_pull_result';
+}
+
 /**
- * Drain all pending IPC input messages.
+ * Drain pending chat messages from the IPC input directory.
+ * Leaves git_pull result files in place — those are not chat input.
  * Returns messages found, or empty array.
  */
 function drainIpcInput(): string[] {
@@ -292,9 +300,12 @@ function drainIpcInput(): string[] {
 
     const messages: string[] = [];
     for (const file of files) {
+      if (file.startsWith('git_pull_result_')) continue;
+
       const filePath = path.join(IPC_INPUT_DIR, file);
       try {
         const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+        if (isGitPullResultFile(file, data)) continue;
         fs.unlinkSync(filePath);
         if (data.type === 'message' && data.text) {
           messages.push(data.text);
@@ -484,6 +495,7 @@ async function runQuery(
       resume: sessionId,
       resumeSessionAt: resumeAt,
       ...(containerInput.model ? { model: containerInput.model } : {}),
+      ...queryThinkingOptions(containerInput.model),
       systemPrompt: globalClaudeMd
         ? { type: 'preset' as const, preset: 'claude_code' as const, append: globalClaudeMd }
         : undefined,
