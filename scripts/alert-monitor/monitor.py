@@ -36,7 +36,7 @@ from typing import Any
 import requests
 
 from conditions import decode_bits, decode_conditions
-from loki_abort import LokiAbortClient, new_hits_after
+from loki_abort import LokiAbortClient, line_is_watchdog, new_hits_after, watchdog_name
 from container_phase import phase_summary, snapshot_filter_controls
 from mute_state import is_muted
 from nanoclaw_ipc import schedule_once
@@ -588,9 +588,11 @@ class AlertMonitor:
                 (system.get("bop") or {}).get("sensors") or {}, BOP_SENSOR_KEYS
             )
 
+        watchdog = line_is_watchdog(latest.line)
+        name = watchdog_name(latest.line) if watchdog else None
         alert = {
             "subsystem": "container",
-            "kind": "job_failed",
+            "kind": "watchdog_trigger" if watchdog else "job_failed",
             "source": "loki",
             "job_id": "container_system",
             "matched_line": latest.line,
@@ -600,7 +602,14 @@ class AlertMonitor:
             "filter_controls": filter_controls,
             "bop_sensors": bop_sensors,
         }
-        self.fire(alert, ["container:job_failed:log"])
+        if name:
+            alert["watchdog"] = name
+        cooldown_key = (
+            f"container:watchdog:{name or 'unknown'}"
+            if watchdog
+            else "container:job_failed:log"
+        )
+        self.fire(alert, [cooldown_key])
 
     def loop_once(self) -> None:
         liq = fetch_latest(self.liq_telemetry, "liquefaction", self.liq_token)

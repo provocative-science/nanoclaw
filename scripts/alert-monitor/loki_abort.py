@@ -17,13 +17,25 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Any
 
-# Same substrings as the Grafana LogQL plant rule.
+# Automation job abort lines (service_name=co3ntrol-automation).
+AUTOMATION_ABORT_PATTERN = r"failed!|Exiting for health reasons|Control set failed"
+
+# Control-binary supervisor lines (service_name=co3ntrol-rs-control). Both
+# wordings have been stable since the supervisor landed:
+#   watchdog 'filter_temp_watchdog' triggered, starting recovery '...'
+#   watchdog 'x' (priority 3) preempting recovery 'y' (priority 1)
+WATCHDOG_TRIGGER_PATTERN = r"watchdog '([^']+)'.*(?:triggered|preempting)"
+
 ABORT_LINE_RE = re.compile(
-    r"(failed!|Exiting for health reasons|Control set failed)",
+    rf"({AUTOMATION_ABORT_PATTERN}|{WATCHDOG_TRIGGER_PATTERN})",
     re.IGNORECASE,
 )
+WATCHDOG_TRIGGER_RE = re.compile(WATCHDOG_TRIGGER_PATTERN, re.IGNORECASE)
 
-DEFAULT_LOKI_QUERY = '{subsystem="container", service_name="co3ntrol-automation"}'
+# Supervisor logs are a different stream from the automation job.
+DEFAULT_LOKI_QUERY = (
+    '{subsystem="container", service_name=~"co3ntrol-automation|co3ntrol-rs-control"}'
+)
 
 
 @dataclass(frozen=True)
@@ -34,6 +46,17 @@ class AbortLogHit:
 
 def line_is_abort(line: str) -> bool:
     return bool(ABORT_LINE_RE.search(line))
+
+
+def line_is_watchdog(line: str) -> bool:
+    return bool(WATCHDOG_TRIGGER_RE.search(line))
+
+
+def watchdog_name(line: str) -> str | None:
+    match = WATCHDOG_TRIGGER_RE.search(line)
+    if match is None:
+        return None
+    return match.group(1)
 
 
 def parse_loki_streams(payload: dict[str, Any]) -> list[AbortLogHit]:

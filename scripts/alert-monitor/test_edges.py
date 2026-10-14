@@ -5,7 +5,15 @@ from __future__ import annotations
 from pathlib import Path
 
 from monitor import AlertMonitor
-from loki_abort import AbortLogHit, line_is_abort, new_hits_after, parse_loki_streams
+from loki_abort import (
+    DEFAULT_LOKI_QUERY,
+    AbortLogHit,
+    line_is_abort,
+    line_is_watchdog,
+    new_hits_after,
+    parse_loki_streams,
+    watchdog_name,
+)
 
 
 class CaptureMonitor(AlertMonitor):
@@ -536,6 +544,23 @@ def test_loki_line_match_helpers() -> None:
     assert not line_is_abort(
         "2026-07-23T02:13:35Z INFO alloy-deploy-smoke co3ntrol-automation"
     )
+    triggered = (
+        "2026-09-24T11:41:57.306528Z  WARN control::supervisor::engine: "
+        "watchdog 'warm_tank_level_watchdog' triggered, "
+        "starting recovery 'warm_tank_level_recovery'"
+    )
+    preempting = (
+        "watchdog 'hot_loop_temp' (priority 3) preempting recovery "
+        "'filter_temp_recovery' (priority 1)"
+    )
+    assert line_is_abort(triggered)
+    assert line_is_watchdog(triggered)
+    assert watchdog_name(triggered) == "warm_tank_level_watchdog"
+    assert line_is_abort(preempting)
+    assert watchdog_name(preempting) == "hot_loop_temp"
+    assert not line_is_watchdog("Control set failed (bop.x); aborting.")
+    assert "co3ntrol-rs-control" in DEFAULT_LOKI_QUERY
+    assert "co3ntrol-automation" in DEFAULT_LOKI_QUERY
 
 
 def test_parse_loki_streams_filters() -> None:
@@ -606,6 +631,35 @@ def test_loki_automation_abort_edge() -> None:
     assert len(m.fired) == 1
     assert m.fired[0]["alert"]["matched_line"] == "Exiting for health reasons"
 
+
+def test_loki_watchdog_trigger_edge() -> None:
+    m = CaptureMonitor()
+    line = (
+        "watchdog 'warm_tank_level_watchdog' triggered, "
+        "starting recovery 'warm_tank_level_recovery'"
+    )
+
+    class FakeLoki:
+        enabled = True
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def fetch_abort_hits(self, *, now=None):
+            self.calls += 1
+            if self.calls == 1:
+                return []
+            return [AbortLogHit(ts_ns=2_000_000_000, line=line)]
+
+    m.loki = FakeLoki()
+    m.loki_poll_interval_s = 0
+    m.process_automation_loki(now=1.0)
+    m.process_automation_loki(now=2.0)
+    assert m.fired[-1]["alert"]["kind"] == "watchdog_trigger"
+    assert m.fired[-1]["alert"]["watchdog"] == "warm_tank_level_watchdog"
+    assert m.fired[-1]["keys"] == ["container:watchdog:warm_tank_level_watchdog"]
+
+
 if __name__ == "__main__":
     from pathlib import Path
     import tempfile
@@ -620,6 +674,7 @@ if __name__ == "__main__":
     test_loki_line_match_helpers()
     test_parse_loki_streams_filters()
     test_loki_automation_abort_edge()
+    test_loki_watchdog_trigger_edge()
     with tempfile.TemporaryDirectory() as td:
         test_mute_skips_fire(Path(td))
     test_recent_deploy_helpers()

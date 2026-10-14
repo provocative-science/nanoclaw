@@ -121,6 +121,12 @@ Also skim `/workspace/shared/plant-alerts/latest.md` for prior alert context.
    Alerting** — the monitor polled Loki directly. Still pull recent
    `subsystem="container"` Prom metrics for context; do not wait for a
    Grafana OnCall page.
+3c. **watchdog_trigger** (control-console Loki): name the `watchdog` field
+   (for example `warm_tank_level_watchdog`) and quote `matched_line`. Say
+   whether it started a recovery or preempted one. This is the supervisor
+   cause; telemetry interlocks often only say `supervisor` /
+   "can't accept unforced commands while locked" and do not name the
+   watchdog. Do not describe it as an automation job abort.
 4. Recent deploy / restart: if payload `recent_deploy.likely` is true, note
    which host(s) show low `app.systick` uptime and weigh post-restart
    startup against a true fault. Confirm with
@@ -152,7 +158,7 @@ from the payload `fired_at` if needed. Keep the whole message concise
 *Subsystem:* <liquefaction | container>
 *Time:* <YYYY-MM-DD HH:MM ET>
 [if liquefaction] *State:* <OFF | DEBUG | RUN | ERROR>
-[if container] *Condition:* <locked | active_recovery | interlock_only | job_failed>
+[if container] *Condition:* <locked | active_recovery | interlock_only | job_failed | watchdog_trigger>
 [if container] *Phase:* <e.g. Extracting Filter E; Purging Filter F>
 [if recent_deploy.likely] *Recent deploy/restart:* <which host(s), approx uptime>
 
