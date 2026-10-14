@@ -26,6 +26,7 @@ source "$ENV_FILE"
 set +a
 
 export NOTION_TOKEN GRAFANA_URL GRAFANA_SERVICE_ACCOUNT_TOKEN
+export TELEMETRY_S3_ACCESS_KEY TELEMETRY_S3_SECRET_KEY TELEMETRY_S3_REGION TELEMETRY_S3_ENDPOINT TELEMETRY_S3_BUCKET TELEMETRY_S3_BUCKETS
 
 envsubst < "$TEMPLATE" > "$OUT_TMP"
 python3 -m json.tool "$OUT_TMP" >/dev/null
@@ -40,4 +41,4 @@ done
 echo "Rendered MCP config into $count group directories (groups/*/.mcp.json)."
 echo "Canonical source: groups/global/.mcp.json (agent-runner merges global + per-group overrides)."
 echo "Restart nanoclaw after changing secrets."
-echo "Notion MCP uses npx at agent runtime (network). Grafana uses uvx (installed in the agent image)."
+echo "Notion MCP uses npx at agent runtime (network). Grafana uses uvx. Plant telemetry uses python3 /app/telemetry-mcp/server.py (duckdb in the agent image)."

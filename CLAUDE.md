@@ -51,13 +51,15 @@ Stdio MCP servers configured for groups read **`groups/{name}/.mcp.json`**. That
 
 **Do not** put long-lived secrets directly into `groups/*/.mcp.json` by hand — the next `./scripts/render-mcp.sh` overwrites those files. Change `secrets/mcp.env` or `config/mcp.json.template` instead.
 
-**Adding a new stdio MCP server:** extend `config/mcp.json.template` with `${NEW_SECRET}`, add the variable to `secrets/mcp.env.example` and `secrets/mcp.env`, and add `export NEW_SECRET` (alongside the existing exports) in `scripts/render-mcp.sh` so `envsubst` can see it. If the Claude Agent SDK rejects tools, add `mcp__<serverKey>__*` to `allowedTools` in `container/agent-runner/src/index.ts` (includes `mcp__nanoclaw__*`, `mcp__notion__*`, `mcp__grafana__*`).
+**Adding a new stdio MCP server:** extend `config/mcp.json.template` with `${NEW_SECRET}`, add the variable to `secrets/mcp.env.example` and `secrets/mcp.env`, and add `export NEW_SECRET` (alongside the existing exports) in `scripts/render-mcp.sh` so `envsubst` can see it. If the Claude Agent SDK rejects tools, add `mcp__<serverKey>__*` to `allowedTools` in `container/agent-runner/src/index.ts` (includes `mcp__nanoclaw__*`, `mcp__notion__*`, `mcp__grafana__*`, `mcp__telemetry__*`).
 
 **Notion MCP:** uses `@notionhq/notion-mcp-server` over stdio with an **internal integration** secret (`NOTION_TOKEN`). Create the integration and grant page access per [Notion’s MCP server docs](https://www.npmjs.com/package/@notionhq/notion-mcp-server). This differs from Cursor’s hosted Notion MCP (`https://mcp.notion.com/mcp`), which relies on OAuth and is not suited to unattended containers.
 
 **Grafana MCP:** the template uses the official `uvx mcp-grafana` invocation per Grafana docs. The **agent container image** installs `uv` / `uvx` (see `container/Dockerfile`) so that command works; wiring still comes from this envsubst pipeline and `loadGroupMcpServersFromDisk()` merging `groups/*/.mcp.json` into the SDK.
 
-**Observability (co3ntrol-rs / Grafana Cloud):** OTLP → Alloy → Mimir/Loki/Tempo, resource attributes, metrics vs logs vs traces, and Grafana MCP usage for the CO₂ control plane are documented for agents in [`groups/global/CLAUDE.md`](groups/global/CLAUDE.md) (mounted in containers as `/workspace/global/CLAUDE.md`).
+**Plant telemetry MCP (Wasabi S3):** parquet dumps of co3ntrol-rs JSONL. Two buckets: **`provocative-dac-dev-beef`** (airbed nested hive) and **`provocative-dac-dev-a7f3`** (container-ship `telemetry/machine=bop-host/`). Set `TELEMETRY_S3_BUCKETS` in `secrets/mcp.env`. The stdio wrapper **unsets `HTTP(S)_PROXY`** (DuckDB httpfs cannot parse OneCLI proxy URLs). Tools are `mcp__telemetry__*`. Agent usage notes live in [`groups/global/CLAUDE.md`](groups/global/CLAUDE.md). Local Cursor: `scripts/run-telemetry-mcp.sh`.
+
+**Observability (co3ntrol-rs / Grafana Cloud):** live Prom scrape → Alloy → Mimir/Loki, plus the S3 parquet archive, are documented for agents in [`groups/global/CLAUDE.md`](groups/global/CLAUDE.md) (mounted in containers as `/workspace/global/CLAUDE.md`).
 
 ## Skills
 
