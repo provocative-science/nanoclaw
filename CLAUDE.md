@@ -102,6 +102,8 @@ Before creating a PR, adding a skill, or preparing any contribution, you MUST re
 
 Run commands directly—don't tell the user to run them.
 
+**Git workflow** (full rule: `.cursor/rules/keep-repo-clean.mdc`): before editing, `git fetch origin` and `git pull --ff-only` on `main`; cut branches and worktrees from `origin/main`. Commit any uncommitted work you find first, commit and push your own work when done, and deploy to bob49 only by pulling `origin/main` into a clean `~/provocative/nanoclaw`. Build test images under their own tag (`./container/build.sh <tag>`): a plain build overwrites the `:latest` image production spawns.
+
 ```bash
 npm run dev          # Run with hot reload
 npm run build        # Compile TypeScript

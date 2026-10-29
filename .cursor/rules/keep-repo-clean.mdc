@@ -1,15 +1,24 @@
 ---
-description: Keep the nanoclaw git working tree clean after every update
+description: Sync the nanoclaw checkout before every update and keep it clean, committed and pushed after
 alwaysApply: true
 ---
+
+# Sync before every update
+
+Before editing anything in this project (including worktrees and the bob49 deployment at `~/provocative/nanoclaw`):
+
+1. **Fetch and check where you are:** `git fetch origin && git status -sb`. Work happens on `main` (tracking `origin/main`) or a feature branch cut from it. If the checkout is on another branch (e.g. the retired `instance/provocative`) or behind `origin/main`, switch to `main` and `git pull --ff-only` first.
+2. **Cut new branches and worktrees from the freshly fetched `origin/main`**, never from a local ref that may be stale. Before merging or deploying, `git fetch` again and rebase onto (or fast-forward from) the current `origin/main`.
+3. **Uncommitted work already in the tree** (often from another agent session) is committed and pushed first, as its own commit, before you start yours. If it is already on `origin/main`, verify that and discard the duplicate; do not stack new work on top of it or carry it along uncommitted.
 
 # Keep the repo clean after every update
 
 After finishing implementation work in this project (features, fixes, docs, config):
 
 1. **Stage and commit** all intentional project changes unless the user said not to commit. This includes **pre-existing uncommitted work** found in the tree at the start of a task: review it, group it into coherent commits (finish or clearly scope any half-done edits), and commit it too — do not leave it behind.
-2. **Always push** to the tracked remote branch (`git push origin main`) after committing, unless the user explicitly said not to push. The remote is the source of truth for the bob49 deployment; unpushed local commits are considered lost work.
-3. **Do not leave** unrelated leftovers: untracked build artifacts, `__pycache__`, local secrets, or half-finished edits that belong in the same change.
-4. **Never commit secrets** (`secrets/*.env`, tokens, credentials). Commit `*.env.example` only.
-5. Prefer **one coherent commit** (or a small clear series) over a dirty tree at end of turn.
-6. After commit/push, verify with `git status` that the worktree is clean (or only has files the user explicitly wants local-only).
+2. **Always push** to the tracked remote branch (`git push origin main`, or `git push -u origin <branch>` for a feature branch) after committing, unless the user explicitly said not to push. The remote is the source of truth for the bob49 deployment; unpushed local commits are considered lost work.
+3. **Deploy only what is on `origin/main`:** push first, then `git pull --ff-only` in `~/provocative/nanoclaw` on bob49. That checkout must be clean before and after a deploy.
+4. **Do not leave** unrelated leftovers: untracked build artifacts, `__pycache__`, local secrets, or half-finished edits that belong in the same change.
+5. **Never commit secrets** (`secrets/*.env`, tokens, credentials). Commit `*.env.example` only.
+6. Prefer **one coherent commit** (or a small clear series) over a dirty tree at end of turn.
+7. After commit/push, verify with `git status -sb` that the worktree is clean and not ahead of its remote (or only has files the user explicitly wants local-only).
