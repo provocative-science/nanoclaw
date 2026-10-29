@@ -298,10 +298,31 @@ def build(fetch: bool) -> dict[str, Any]:
         common.git_show(rs, primary_ref, "documents/Airbed System Parts List - Electrical IO Assignments.csv") or ""
     )
     topo_signals: dict[str, dict[str, Any]] = {}
+    topo_coils: dict[str, list[str]] = {}
+    stations: list[dict[str, Any]] = []
     topo_text = common.git_show(rs, primary_ref, "tools/io-topology/topology.json")
     if topo_text:
-        for sig in json.loads(topo_text).get("signals", []):
+        topo = json.loads(topo_text)
+        for sig in topo.get("signals", []):
             topo_signals[sig["name"]] = sig
+        for m in topo.get("manifolds", []):
+            topo_coils[m["valve"]] = [
+                f"riser {c['riser']} OD{c['od_pin']} = manifold {c['manifold_number']} pin {c['manifold_pin']}"
+                + (f" ({c['coil']})" if c.get("coil") else "")
+                for c in m.get("coils", [])
+            ]
+        for st in topo.get("stations", []):
+            stations.append(
+                {
+                    "id": st["id"],
+                    "address": st.get("address"),
+                    "kind": st.get("kind"),
+                    "risers": len(st.get("risers") or []),
+                    "devices": [
+                        f"{d.get('id')} (unit {d.get('unit_id')}, {d.get('part')})" for d in st.get("devices") or []
+                    ],
+                }
+            )
 
     # Decode tables (liquefaction state names etc.)
     decodes: dict[str, dict[int, str]] = {}
@@ -424,6 +445,8 @@ def build(fetch: bool) -> dict[str, Any]:
                     sig["device"] = read["device"]
                 if topo.get("note"):
                     sig["io_note"] = topo["note"]
+            if field in topo_coils:
+                sig["coils"] = topo_coils[field]
         units = sp.units_from_text(" ".join(str(sig.get(k, "")) for k in ("spec", "doc")))
         if units:
             sig["units"], sig["units_source"] = units, "spec/doc"
@@ -495,6 +518,7 @@ def build(fetch: bool) -> dict[str, Any]:
         "signals": signals,
         "rules": rules,
         "jobs": jobs,
+        "stations": {"airbed": stations},
     }
 
 
@@ -530,6 +554,19 @@ def render_system_doc(dictionary: dict[str, Any], doc_name: str) -> str:
     if doc_name == "liquefaction":
         lines.append("- Liquefaction is not in S3 parquet; query live values in Grafana/Mimir with the `prom` names below.")
     lines.append("")
+    stations = (dictionary.get("stations") or {}).get(doc_name) or []
+    if stations:
+        lines += [
+            "## Modbus stations (console lines name these addresses)",
+            "",
+            "| station | address | kind | risers | devices |",
+            "| --- | --- | --- | --- | --- |",
+        ]
+        for st in stations:
+            lines.append(
+                f"| {st['id']} | {st['address']} | {st['kind']} | {st['risers'] or ''} | {_cell(', '.join(st['devices']))} |"
+            )
+        lines.append("")
     groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for s in sigs:
         groups[f"{s['kind']} — {s.get('gui_section') or s.get('group') or 'Other'}"].append(s)
@@ -542,6 +579,7 @@ def render_system_doc(dictionary: dict[str, Any], doc_name: str) -> str:
                     s.get("description"),
                     s.get("spec"),
                     s.get("read_path"),
+                    ("coils " + ", ".join(s["coils"])) if s.get("coils") else "",
                     "UNWIRED" if s.get("wired") is False else "",
                     "NOT DEPLOYED" if not s.get("deployed_on") and doc_name != "liquefaction" else "",
                     ("decode " + ", ".join(f"{k}={v}" for k, v in s["decode"].items())) if s.get("decode") else "",

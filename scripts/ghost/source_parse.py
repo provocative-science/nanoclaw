@@ -475,6 +475,41 @@ def parse_io_tables(md: str) -> dict[str, dict[str, str]]:
     return out
 
 
+def parse_manifold_table(md: str) -> list[dict[str, Any]]:
+    """Rows of the "Pneumatic manifolds" table: which panel riser OD pin drives which manifold coil/valve."""
+    rows: list[dict[str, Any]] = []
+    in_section, header = False, []
+    for line in md.splitlines():
+        if line.startswith("## "):
+            in_section = line[3:].strip().lower() == "pneumatic manifolds"
+            header = []
+            continue
+        if not in_section or not line.startswith("|"):
+            continue
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if all(set(c) <= set("-: ") for c in cells):
+            continue
+        if not header:
+            header = [c.lower() for c in cells]
+            continue
+        row = dict(zip(header, cells))
+        m = re.match(r"OD(\d+)$", row.get("od pin", ""))
+        if not m or not row.get("riser", "").isdigit():
+            continue
+        valve = row.get("valve", "")
+        rows.append(
+            {
+                "riser": int(row["riser"]),
+                "od_pin": int(m.group(1)),
+                "manifold_number": row.get("manifold number", ""),
+                "manifold_pin": row.get("manifold pin", ""),
+                "ref_des": "" if row.get("ref des", "") in ("", "-", "—") else row["ref des"],
+                "valve": "" if valve.upper() == "UNUSED" else valve,
+            }
+        )
+    return rows
+
+
 def parse_parts_csv(text: str) -> dict[str, dict[str, str]]:
     """RefDes -> {mpn, spec, name, notes} from the electrical IO assignments sheet."""
     rows = list(csv.reader(io.StringIO(text)))

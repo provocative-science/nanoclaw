@@ -131,6 +131,25 @@ def score(sig: dict[str, Any], query: str, qtokens: list[str]) -> float:
     return base + ratio
 
 
+_IP_RE = re.compile(r"\b(\d{1,3}(?:\.\d{1,3}){3})(?::(\d+))?\b")
+
+
+def stations_for_text(text: str) -> list[dict[str, Any]]:
+    """Modbus stations whose address appears in `text` (console lines, user questions)."""
+    try:
+        d = load()
+    except FileNotFoundError:
+        return []
+    found = []
+    for ip, port in _IP_RE.findall(text or ""):
+        for system, stations in (d.get("stations") or {}).items():
+            for st in stations:
+                host, _, st_port = (st.get("address") or "").partition(":")
+                if host == ip and (not port or port == st_port) and st not in found:
+                    found.append(st | {"system": system})
+    return found
+
+
 def lookup(
     query: str,
     system: str = "",
@@ -186,7 +205,10 @@ def lookup(
     }
     if rules:
         out["rules"] = rules[:6]
-    if not ranked and not rules:
+    stations = stations_for_text(query)
+    if stations:
+        out["stations"] = stations
+    if not ranked and not rules and not stations:
         out["hint"] = (
             "No match. Try a GUI label (e.g. 'Vent/Bag Valve'), an IO tag (e.g. 'V17', 'B90'), a Prom name, "
             "or browse /workspace/ghost/systems/*.md"

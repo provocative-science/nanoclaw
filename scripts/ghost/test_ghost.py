@@ -223,6 +223,57 @@ class IoChangeTests(unittest.TestCase):
         changes = self.ic.diff_io_maps(before, self.ic.parse_io_map(text))
         self.assertIn("warning", changes[0])
 
+    MANIFOLD_MD = """
+## Pneumatic manifolds
+
+| Riser | OD pin | Manifold number | Manifold pin | Ref des | Valve                                |
+| ----- | ------ | --------------- | ------------ | ------- | ------------------------------------ |
+| 5     | OD4    | 1               | 13           | V17     | vent_or_bag_valve                    |
+| 5     | OD5    | 1               | 14           | V17     | vent_or_bag_valve                    |
+| 5     | OD6    | 1               | 15           | -       | UNUSED                               |
+| 5     | OD7    | 1               | 16           | V20     | desorb_tube_extraction_gas_out_valve |
+
+## Other
+| Riser | OD pin |
+| 9     | OD1    |
+"""
+
+    def test_manifold_table(self):
+        rows = sp.parse_manifold_table(self.MANIFOLD_MD)
+        self.assertEqual(len(rows), 4)
+        self.assertEqual(rows[2], {"riser": 5, "od_pin": 6, "manifold_number": "1", "manifold_pin": "15", "ref_des": "", "valve": ""})
+
+    def test_coil_annotation_flags_move_onto_spare(self):
+        before_rows = sp.parse_manifold_table(self.MANIFOLD_MD)
+        after_rows = sp.parse_manifold_table(
+            self.MANIFOLD_MD.replace("| 15           | -       | UNUSED                              ", "| 15           | V20     | desorb_tube_extraction_gas_out_valve")
+            .replace("| 16           | V20     | desorb_tube_extraction_gas_out_valve", "| 16           | -       | UNUSED                              ")
+        )
+        ch = self.ic.diff_io_maps(
+            self.ic.parse_io_map(AIRBED_IO.replace("PIN", "7")), self.ic.parse_io_map(AIRBED_IO.replace("PIN", "6"))
+        )[0]
+        self.ic.annotate_coils(ch, "panel_station", before_rows, after_rows)
+        self.assertIn("now drives riser 5 OD6 = manifold 1 pin 15", ch["coils"])
+        self.assertTrue(any("OD7 = manifold 1 pin 16, documented UNUSED" in c for c in ch["coils"]))
+        self.assertTrue(any("UNUSED (spare coil) before this commit" in w for w in ch["coil_warnings"]))
+        self.assertTrue(any("physically re-plumbed" in w for w in ch["coil_warnings"]))
+
+    def test_double_to_single_is_not_a_move(self):
+        text = AIRBED_IO.replace("PIN", "7")
+        single = text.replace("Some(!v.od_bit(4)? && v.od_bit(5)?)", "v.od_bit(4)").replace("5, 4, 5, value", "5, 4, value").replace("set_od_pair", "set_od")
+        ch = next(c for c in self.ic.diff_io_maps(self.ic.parse_io_map(text), self.ic.parse_io_map(single)) if c["signal"] == "vent_or_bag_valve")
+        rows = sp.parse_manifold_table(self.MANIFOLD_MD)
+        self.ic.annotate_coils(ch, "panel_station", rows, rows)
+        self.assertNotIn("coil_warnings", ch)
+        self.assertEqual(ch["coils"], ["no longer drives riser 5 OD5 = manifold 1 pin 14"])
+
+    def test_mark_reverts(self):
+        bad = {"sha": "731e0e8", "when": "2026-10-28T20:02:00Z", "io": {"remaps": [{"signal": "s", "before": "OD7", "after": "OD6"}]}}
+        fix = {"sha": "9256f09", "when": "2026-10-29T13:57:00Z", "io": {"remaps": [{"signal": "s", "before": "OD6", "after": "OD7"}]}}
+        self.ic.mark_reverts([fix, bad])
+        self.assertEqual(fix["io"]["remaps"][0]["reverts"], "731e0e8")
+        self.assertEqual(bad["io"]["remaps"][0]["reverted_by"]["sha"], "9256f09")
+
     def test_io_change_log_pairs_restarts_on_deployed_branch(self):
         import change_digest as cd
 

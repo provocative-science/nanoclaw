@@ -11,8 +11,12 @@ from pathlib import Path
 from typing import Any
 
 import common
+import source_parse
 
 SYSTEM_DIR = "control/src/system/"
+# Pneumatic manifold table: panel riser OD pin -> manifold coil -> valve (hand-maintained wiring doc,
+# kept in step with the code by co3ntrol-rs tools/io-topology/validate_io_table.py).
+IO_DOCS = {"control/src/system/airbed.rs": ("documents/airbed-telemetry-io.md", "panel_station")}
 
 # `field: panel_station_riser_states[5]\n    .and_then(|v| Some(!v.od_bit(4)? && v.od_bit(5)?)),`
 _READ_RE = re.compile(
@@ -90,6 +94,16 @@ def riser_keys(io: dict[str, Any] | None) -> set[str]:
     return keys
 
 
+def od_pins(io: dict[str, Any] | None) -> set[tuple[str, int, int]]:
+    """(station, riser, pin) for every digital output the signal reads back or drives."""
+    if not io:
+        return set()
+    pins = {(io["station"], io["riser"], p) for k, p in io.get("read") or [] if k == "od_bit"}
+    ws, wr = io.get("write_station", io.get("station")), io.get("write_riser", io.get("riser"))
+    pins |= {(ws, wr, p) for p in io.get("write") or []}
+    return pins
+
+
 def _comparable(io: dict[str, Any] | None) -> tuple:
     if not io:
         return ()
@@ -134,6 +148,8 @@ def diff_io_maps(before: dict[str, dict[str, Any]], after: dict[str, dict[str, A
             "before": describe(a),
             "after": describe(b),
             "risers": sorted(riser_keys(a) | riser_keys(b)),
+            "pins_dropped": sorted(od_pins(a) - od_pins(b)),
+            "pins_added": sorted(od_pins(b) - od_pins(a)),
         }
         if b and b.get("write") and b.get("read"):
             read_od = sorted(p for k, p in b["read"] if k == "od_bit")
@@ -155,6 +171,54 @@ def _pin_owners(io_map: dict[str, dict[str, Any]]) -> dict[str, list[str]]:
             if sig not in owners.get(key, []):
                 owners.setdefault(key, []).append(sig)
     return owners
+
+
+def _coil(row: dict[str, Any] | None) -> str:
+    return f"manifold {row['manifold_number']} pin {row['manifold_pin']}" if row else "no manifold row"
+
+
+def annotate_coils(
+    change: dict[str, Any], station: str, before_rows: list[dict[str, Any]], after_rows: list[dict[str, Any]]
+) -> None:
+    """Describe a remap in manifold-coil terms and flag moves onto/off spare or other valves' coils."""
+    before = {(r["riser"], r["od_pin"]): r for r in before_rows}
+    after = {(r["riser"], r["od_pin"]): r for r in after_rows}
+    sig = change["signal"]
+    added = [(r, p) for st, r, p in change.get("pins_added", []) if st == station]
+    dropped = [(r, p) for st, r, p in change.get("pins_dropped", []) if st == station]
+    coils, warnings = [], []
+    for riser, pin in added:
+        coils.append(f"now drives riser {riser} OD{pin} = {_coil(after.get((riser, pin)))}")
+        prev = before.get((riser, pin))
+        if prev and prev["valve"] != sig:
+            owner = prev["valve"] or "UNUSED (spare coil)"
+            warnings.append(f"riser {riser} OD{pin} ({_coil(prev)}) was documented as {owner} before this commit")
+    for riser, pin in dropped:
+        row = after.get((riser, pin)) or before.get((riser, pin))
+        now = after.get((riser, pin))
+        owner = f", documented {now['valve'] or 'UNUSED'} after this commit" if now and now["valve"] != sig else ""
+        coils.append(f"no longer drives riser {riser} OD{pin} = {_coil(row)}{owner}")
+    if added and dropped:
+        warnings.append(
+            "valve moved to a different coil: correct only if it was physically re-plumbed to the new coil; "
+            "otherwise the valve is now undriven and the new pin drives whatever is on that coil"
+        )
+    if coils:
+        change["coils"] = coils
+    if warnings:
+        change["coil_warnings"] = warnings
+
+
+def mark_reverts(commits: list[dict[str, Any]]) -> None:
+    """Tag remaps that undo an earlier commit's remap of the same signal (commits newest first)."""
+    seen: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    for c in reversed(commits):
+        for r in (c.get("io") or {}).get("remaps", []):
+            for older_c, older in seen:
+                if older["signal"] == r["signal"] and older["before"] == r["after"] and older["after"] == r["before"]:
+                    r["reverts"] = older_c["sha"]
+                    older["reverted_by"] = {"sha": c["sha"], "committed": c["when"]}
+            seen.append((c, r))
 
 
 def diff_excerpt(patch: str, max_lines: int = 10) -> list[str]:
@@ -182,6 +246,14 @@ def commit_io_changes(repo: Path, sha: str, files: list[str]) -> dict[str, Any] 
         new = common.git_show(repo, sha, f) or ""
         before, after = parse_io_map(old), parse_io_map(new)
         file_remaps = diff_io_maps(before, after)
+        doc = IO_DOCS.get(f)
+        if file_remaps and doc:
+            rows_before = source_parse.parse_manifold_table(common.git_show(repo, f"{sha}^", doc[0]) or "")
+            rows_after = source_parse.parse_manifold_table(common.git_show(repo, sha, doc[0]) or "")
+            for ch in file_remaps:
+                annotate_coils(ch, doc[1], rows_before, rows_after)
+                if rows_before != rows_after:
+                    ch["wiring_doc_edited_in_same_commit"] = True
         if file_remaps:
             owners = _pin_owners(after)
             for ch in file_remaps:

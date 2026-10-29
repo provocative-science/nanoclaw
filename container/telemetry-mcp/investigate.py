@@ -242,6 +242,11 @@ def _collapse_console(lines: list[dict[str, Any]], max_items: int = 25) -> list[
             order.append(key)
         groups[key]["count"] += 1
         groups[key]["last_ts"] = ln["ts"]
+        for st in sigs.stations_for_text(ln.get("message") or ""):
+            label = f"{st['id']} {st['address']} ({st['kind']}{': ' + ', '.join(st['devices']) if st['devices'] else ''})"
+            names = groups[key].setdefault("stations", [])
+            if label not in names:
+                names.append(label)
     return [groups[k] for k in order[:max_items]]
 
 
@@ -305,11 +310,12 @@ def changes_before(
             "restarts_after_commit_before_onset": live,
             "hours_before_onset": round((onset - authored).total_seconds() / 3600, 1),
         }
-        hit = [
+        remaps = [
             r
             for r in ch.get("remaps", [])
-            if r["signal"] in leaves or (set(r.get("risers", [])) & affected_risers)
+            if not (r.get("reverted_by") and _digest_ts(r["reverted_by"]["committed"]) <= onset)
         ]
+        hit = [r for r in remaps if r["signal"] in leaves or (set(r.get("risers", [])) & affected_risers)]
         if hit and live:
             item["match_score"] = max(
                 3 if r["signal"] in primary_leaves else 2 if set(r.get("risers", [])) & primary_risers else 1 for r in hit
@@ -345,10 +351,16 @@ def changes_before(
     if on_affected:
         top = on_affected[0]
         by_sig = {r["signal"]: r for r in top["remaps"]}
-        sigs_hit = "; ".join(
-            f"`{m['signal']}` on {'/'.join(m['risers'])}: {by_sig[m['signal']]['before']} → {by_sig[m['signal']]['after']}"
-            for m in top["matched"]
-        )
+        def remap_text(m: dict[str, Any]) -> str:
+            r = by_sig[m["signal"]]
+            text = f"`{m['signal']}` on {'/'.join(m['risers'])}: {r['before']} → {r['after']}"
+            if r.get("coils"):
+                text += f" ({'; '.join(r['coils'] + r.get('coil_warnings', []))})"
+            if r.get("reverted_by"):
+                text += f" [later REVERTED by {r['reverted_by']['sha']} at {r['reverted_by']['committed'][:16]}]"
+            return text
+
+        sigs_hit = "; ".join(remap_text(m) for m in top["matched"])
         out["assessment"] = (
             f"{top['sha']} ({top['author']}, {top['hours_before_onset']}h before onset: {top['subject']}) remapped {sigs_hit}, "
             f"the same signals/risers that failed here, and the controller restarted after it "

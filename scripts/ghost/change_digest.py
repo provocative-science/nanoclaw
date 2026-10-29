@@ -138,7 +138,9 @@ def recent_commits(repo: Path, since: datetime, until: datetime) -> list[dict[st
                 if io:
                     entry["io"] = io
             entry["branches"].append(ref.replace("origin/", ""))
-    return sorted(commits.values(), key=lambda c: c["when"], reverse=True)
+    ordered = sorted(commits.values(), key=lambda c: c["when"], reverse=True)
+    io_changes.mark_reverts(ordered)
+    return ordered
 
 
 def deployed_refs() -> dict[str, str]:
@@ -299,9 +301,19 @@ def render_md(d: dict[str, Any], max_commits: int = 12, max_chat: int = MAX_CHAT
         lines.append(head)
         for r in ch["remaps"][:6]:
             what = f"renamed from {r['renamed_from']}" if r.get("renamed_from") else f"{r['before']} → {r['after']}"
-            extra = f"; pin also used by {', '.join(r['pin_also_used_by'])}" if r.get("pin_also_used_by") else ""
-            warn = f"; {r['warning']}" if r.get("warning") else ""
-            lines.append(f"  - `{r['signal']}`: {what}{extra}{warn}")
+            notes = [", ".join(r["coils"])] if r.get("coils") else []
+            notes += r.get("coil_warnings", [])
+            if r.get("pin_also_used_by"):
+                notes.append(f"pin also used by {', '.join(r['pin_also_used_by'])}")
+            if r.get("warning"):
+                notes.append(r["warning"])
+            if r.get("reverts"):
+                notes.append(f"reverts {r['reverts']}")
+            if r.get("reverted_by"):
+                notes.append(f"REVERTED by {r['reverted_by']['sha']} ({r['reverted_by']['committed'][:16]})")
+            if r.get("wiring_doc_edited_in_same_commit"):
+                notes.append("wiring doc edited in the same commit (author's claim, not independent confirmation)")
+            lines.append(f"  - `{r['signal']}`: {what}" + "".join(f"; {n}" for n in notes))
         for line in ch["excerpt"][:6]:
             lines.append(f"  - `{line}`")
     lines += ["", "### Code (co3ntrol-rs / co3ntrol-gui, all active branches)"]
