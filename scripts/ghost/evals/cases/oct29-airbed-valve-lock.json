@@ -2,7 +2,7 @@
   "id": "oct29-airbed-valve-lock",
   "kind": "chat",
   "known_miss": true,
-  "description": "Airbed supervisor lock 2026-10-29 05:42 UTC. Ghost first called 'the supervisor lock' the root cause; the tooling replay then blamed a panel Modbus dropout. Actual root cause (confirmed by Spark): commit 731e0e8 moved desorb_tube_extraction_gas_out_valve from panel riser 5 OD7 to OD6; fixed by 9256f09 (back to OD7).",
+  "description": "Airbed supervisor lock 2026-10-29 05:42 UTC (01:42 ET). Ghost first called 'the supervisor lock' the root cause. The panel station stopped answering (47 fields null), extraction_bag_watchdog tripped on the missing vent_or_bag_valve input and its recovery failed with MemoryParityError until the station came back at 07:07 UTC. The pin remap 731e0e8 was live on the same riser but unrelated: its output was not written for 8.7h before onset and a remap cannot drop a station. (Spark, 2026-10-29: the pin swap caused the morning valve failure, the watchdog fired separately.)",
   "cutoff": "2026-10-29T12:30:00Z",
   "messages": [
     {
@@ -12,9 +12,10 @@
     }
   ],
   "exclude_kb": [
-    "k-20261029-m24"
+    "k-20261029-m24",
+    "k-20261029-m25"
   ],
-  "ground_truth": "Root cause: bad code update 731e0e8 (Spark, Oct 28, on ix/refactor-automation / sg/add-valves, live after the controller restarts ending 21:03 UTC) swapped desorb_tube_extraction_gas_out_valve from OD7 to OD6 on panel_station riser 5 — the riser that also carries vent_or_bag_valve. At 05:42:20 UTC riser-5 fields (incl. vent_or_bag_valve) went null, extraction_bag_watchdog tripped on the missing input at 05:42:22 and its recovery failed with Modbus MemoryParityError. Swapping the pin back (9256f09, restart 13:40 UTC) resolved it. The Modbus errors are a symptom, not the root cause.",
+  "ground_truth": "Lock at 05:42:22 UTC: the panel_station (192.168.105.100) stopped answering at 05:42:20 — 45 panel fields incl. vent_or_bag_valve went null; extraction_bag_watchdog trips on missing inputs; extraction_bag_recovery's writes failed with Modbus(Device(MemoryParityError)) every ~4.5 s until the station recovered at 07:07:03 UTC. Why the station dropped is not established. 731e0e8 (gas-out valve OD7→OD6 on riser 5) was live but is not the cause: the valve was not written overnight and a remap does not drop a Modbus station. The earlier watchdog trips at 19:33 and 20:09 UTC Oct 28 recovered normally.",
   "expect": {
     "must_mention": [
       {
@@ -26,12 +27,12 @@
         "pattern": "(null|missing|stale|not reporting|no (data|reading)|dropped out|went dark)"
       },
       {
-        "name": "names the pin-swap commit",
-        "pattern": "(731e0e8|OD ?7\\s*(→|->|to)\\s*OD ?6|pin (swap|change|remap)|remap\\w*)"
+        "name": "device/IO (Modbus) fault",
+        "pattern": "(modbus|memory ?parity|backplane|panel[ _](i/?o|station|comms)|i/?o (fault|dropout))"
       },
       {
-        "name": "links it to the extraction gas out valve",
-        "pattern": "desorb[_ ]tube[_ ]extraction[_ ]gas[_ ]out|extraction[ -]gas[ -]out"
+        "name": "reports the change check",
+        "pattern": "(731e0e8|remap|pin (swap|change)|recent change|deploy)"
       }
     ],
     "must_not": [
@@ -44,8 +45,12 @@
         "pattern": "root cause[^\\n]{0,80}(leak|bag angle (too|out|above|below|exceed))"
       },
       {
-        "name": "no hardware/comms fault as confirmed root cause",
-        "pattern": "root cause:?\\*?[^\\n]{0,60}(modbus|memory ?parity|panel[- ]station (modbus|comms|dropout)|backplane (fault|dropout)|hardware)"
+        "name": "pin remap not the root cause",
+        "pattern": "root cause:?\\*?[^\\n]{0,80}(731e0e8|remap|pin (swap|change)|OD ?7\\s*(→|->|to)\\s*OD ?6)"
+      },
+      {
+        "name": "pin remap not the leading hypothesis",
+        "pattern": "leading (deploy )?hypothesis[^\\n]{0,80}(731e0e8|remap|pin (swap|change)|OD ?6)"
       }
     ],
     "must_call": [
@@ -64,8 +69,8 @@
         "pattern": "extraction_bag_watchdog"
       },
       {
-        "name": "pin remap retrieved",
-        "pattern": "desorb_tube_extraction_gas_out_valve[^\\n]{0,200}OD6"
+        "name": "Modbus error seen",
+        "pattern": "MemoryParityError"
       }
     ],
     "contract": true,

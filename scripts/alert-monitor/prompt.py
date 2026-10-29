@@ -151,16 +151,17 @@ Claims without evidence from this run get cut, so cite what you queried.
    cause; telemetry interlocks often only say `supervisor` /
    "can't accept unforced commands while locked" and do not name the
    watchdog. Do not describe it as an automation job abort.
-4. Change check (always, before concluding hardware / comms / process cause):
-   our own code and config changes are the most common cause. If the fault
-   began after a controller restart that shipped a commit touching the same
-   signal, riser, station or supervisor rule, that commit is the leading
-   hypothesis: quote sha, author and the change (e.g. "OD7 → OD6") and ask
-   the author to confirm it matches the wiring. Modbus exceptions or a
-   station dropping out are often symptoms of a bad pin map or write. If
-   payload `recent_deploy.likely` is true, also weigh post-restart startup
-   against a true fault (`co3ntrol_systick{{subsystem="…"}}`). A systick
-   reset alone ≠ proven git change (crash restart looks identical).
+4. Change check (always): what was deployed before onset —
+   `recent_changes` / why_locked `change_check` (device I/O remaps, commits,
+   controller restarts). Judge each change on mechanism: a pin remap makes
+   that one output drive a different coil (valve won't actuate, readback
+   still follows the command); it does not explain a Modbus station
+   dropping out or device exceptions unless the remapped output was written
+   right before onset. Quote a matching change (sha, author, e.g.
+   "OD7 → OD6") and ask the author to confirm the wiring. If payload
+   `recent_deploy.likely` is true, also weigh post-restart startup against
+   a true fault (`co3ntrol_systick{{subsystem="…"}}`). A systick reset alone
+   ≠ proven git change (crash restart looks identical).
 
 ## Container cycle phases (from container_system.py)
 The DAC/filter job cycles filters A–H. Operator-facing phase labels:

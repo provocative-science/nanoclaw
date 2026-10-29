@@ -380,8 +380,9 @@ def recent_changes(host: str, at: str = "", signals: list[str] | None = None, ho
 
     `at` is the fault onset (default now). `signals` are the affected fields (e.g. the ones that
     went null or misbehaved); remaps of those signals, or of other signals on the same backplane
-    riser, are ranked first. Run this for every fault before concluding hardware, comms or process
-    cause — a fault that starts after a deploy touching the same device is the leading hypothesis.
+    riser, are ranked first. Run this for every fault and judge each change on mechanism: a pin
+    remap explains that output not actuating while its readback follows the command (match="direct"),
+    not a station dropping out or Modbus exceptions.
     Reads the host change digest (hourly), so check digest_generated_at against the onset.
     """
     try:

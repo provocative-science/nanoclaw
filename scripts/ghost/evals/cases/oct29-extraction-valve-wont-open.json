@@ -1,0 +1,99 @@
+{
+  "id": "oct29-extraction-valve-wont-open",
+  "kind": "chat",
+  "known_miss": true,
+  "host": "airbed-host",
+  "description": "2026-10-29 startup: Woody could not actuate the desorb tube extraction gas out valve (V20). Ghost blamed the overnight supervisor lock, which had already been cleared at 12:31 UTC. Root cause (Spark): 731e0e8 moved the valve from riser 5 OD7 to OD6; fixed by 9256f09 (restart 13:40 UTC). Messages are Woody's/Indrid's/Vinay's real chat; the final @Ghost question is synthetic.",
+  "cutoff": "2026-10-29T12:48:00Z",
+  "messages": [
+    {
+      "sender": "Woody",
+      "time": "2026-10-29T12:39:00Z",
+      "text": "Can someone help me with valve names?  Extraction gas valve out doesn’t seem to open the extraction valve, and there is an extraction vac vent valve and drain valve?"
+    },
+    {
+      "sender": "Woody",
+      "time": "2026-10-29T12:39:30Z",
+      "text": "How do I open the extraction valve?"
+    },
+    {
+      "sender": "Woody",
+      "time": "2026-10-29T12:42:00Z",
+      "text": "Indrid I have the right valve name and it won’t actuate, is this a supervisor issue?"
+    },
+    {
+      "sender": "Indrid",
+      "time": "2026-10-29T12:45:00Z",
+      "text": "Spark is adding more valves so it's unclear if the control you're talking about is routed yet"
+    },
+    {
+      "sender": "Woody",
+      "time": "2026-10-29T12:46:00Z",
+      "text": "No popup, valve won’t actuate, what else should I look at? It’s not a mechanical issue with the valve, and other valve do actuate"
+    },
+    {
+      "sender": "Vinay",
+      "time": "2026-10-29T12:46:30Z",
+      "text": "Its a valve we had on the old system.  It is one that got moved, since they replaced the filter."
+    },
+    {
+      "sender": "Woody",
+      "time": "2026-10-29T12:47:00Z",
+      "text": "But it must have been working yesterday. Did things change last night?"
+    },
+    {
+      "sender": "Woody",
+      "time": "2026-10-29T12:47:30Z",
+      "text": "@Ghost why won't the desorb tube extraction gas out valve actuate?"
+    }
+  ],
+  "exclude_kb": [
+    "k-20261029-m24",
+    "k-20261029-m25"
+  ],
+  "ground_truth": "731e0e8 (Spark, Oct 28, live since the 21:03 UTC restart) moved desorb_tube_extraction_gas_out_valve from panel riser 5 OD7 (manifold 1 pin 16) to OD6 (manifold 1 pin 15, previously a spare coil). The valve is still wired to pin 16, so commands energise the spare coil; telemetry readback follows the command because it reads OD6 too. The supervisor lock was cleared at 12:31 UTC and is not involved. Fix: 9256f09 back to OD7.",
+  "expect": {
+    "must_mention": [
+      {
+        "name": "names the pin-swap commit",
+        "pattern": "(731e0e8|OD ?7\\s*(→|->|to)\\s*OD ?6|pin (swap|change|remap)|remap\\w*)"
+      },
+      {
+        "name": "names the valve",
+        "pattern": "desorb[_ ]tube[_ ]extraction[_ ]gas[_ ]out|extraction[ -]gas[ -]out"
+      },
+      {
+        "name": "lock not the cause / already cleared",
+        "pattern": "(lock[^\\n]{0,60}(cleared|not (set|engaged|active|locked)|false|released)|not (a )?supervisor|unlocked)"
+      }
+    ],
+    "must_not": [
+      {
+        "name": "supervisor/lock not the root cause",
+        "pattern": "root cause:?\\*?[^\\n]{0,80}(supervisor|lock|interlock)"
+      },
+      {
+        "name": "supervisor/lock not the leading hypothesis",
+        "pattern": "leading hypothesis[^\\n]{0,60}(supervisor|lock|interlock)"
+      }
+    ],
+    "must_call": [
+      {
+        "name": "ran the change check",
+        "pattern": "mcp__telemetry__(recent_changes|why_locked)"
+      },
+      {
+        "name": "checked the valve in telemetry",
+        "pattern": "mcp__telemetry__(find_transitions|plant_snapshot|query_sql|query_range)"
+      }
+    ],
+    "evidence": [
+      {
+        "name": "pin remap retrieved",
+        "pattern": "desorb_tube_extraction_gas_out_valve[^\\n]{0,300}OD6"
+      }
+    ],
+    "contract": true,
+    "max_tool_calls": 40
+  }
+}

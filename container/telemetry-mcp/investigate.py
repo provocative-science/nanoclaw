@@ -349,10 +349,8 @@ def changes_before(
     if generated < onset:
         out["digest_note"] = "digest was generated before the fault; commits deployed after it are not listed"
     if on_affected:
-        top = on_affected[0]
-        by_sig = {r["signal"]: r for r in top["remaps"]}
-        def remap_text(m: dict[str, Any]) -> str:
-            r = by_sig[m["signal"]]
+        def remap_text(item: dict[str, Any], m: dict[str, Any]) -> str:
+            r = {x["signal"]: x for x in item["remaps"]}[m["signal"]]
             text = f"`{m['signal']}` on {'/'.join(m['risers'])}: {r['before']} → {r['after']}"
             if r.get("coils"):
                 text += f" ({'; '.join(r['coils'] + r.get('coil_warnings', []))})"
@@ -360,30 +358,95 @@ def changes_before(
                 text += f" [later REVERTED by {r['reverted_by']['sha']} at {r['reverted_by']['committed'][:16]}]"
             return text
 
-        sigs_hit = "; ".join(remap_text(m) for m in top["matched"])
-        out["assessment"] = (
-            f"{top['sha']} ({top['author']}, {top['hours_before_onset']}h before onset: {top['subject']}) remapped {sigs_hit}, "
-            f"the same signals/risers that failed here, and the controller restarted after it "
-            f"(last {top['restarts_after_commit_before_onset'][-1][:19]}). Treat this deploy as the leading hypothesis "
-            "until ruled out: say so, quote the remap, and ask whether the pin change matches the wiring. "
-            "Do not conclude a hardware/comms fault without addressing it."
-        )
-        if len(on_affected) > 1:
-            out["assessment"] += " Also on affected risers (weaker match): " + ", ".join(
-                f"{i['sha']} {i['subject'][:70]}" for i in on_affected[1:3]
+        def head(item: dict[str, Any]) -> str:
+            sigs_hit = "; ".join(remap_text(item, m) for m in item["matched"])
+            live = f"live since the controller restart at {item['restarts_after_commit_before_onset'][-1][:19]}"
+            return (
+                f"{item['sha']} ({item['author']}, {item['hours_before_onset']}h before onset: {item['subject']}) "
+                f"remapped {sigs_hit}, {live}."
+            )
+
+        direct = [i for i in on_affected if i["match_score"] >= 3]
+        if direct:
+            out["match"] = "direct"
+            out["assessment"] = (
+                " ".join(head(i) for i in direct[:3])
+                + " The remapped signal is one that misbehaved. A wrong pin shows up as that output not "
+                "actuating (or another coil actuating) while its telemetry readback still follows the command, because "
+                "the readback reads the same remapped pin. If that matches the symptom, this deploy is the leading "
+                "hypothesis: quote the remap and ask the author whether it matches the wiring."
+            )
+        else:
+            direct = on_affected[:1]
+            out["match"] = "same riser"
+            out["assessment"] = (
+                f"{head(direct[0])} It shares a backplane riser with the affected signals but is not itself the failing "
+                "input. A pin remap only changes which coil that one output drives; it does not by itself make other "
+                "fields go null, drop a Modbus station or produce device exceptions. Mention it, then rule it in or out "
+                "on mechanism (was the remapped output written just before onset? does the symptom involve that output?)."
+            )
+        rest = [i for i in on_affected if i not in direct]
+        if rest:
+            out["assessment"] += " Also on affected risers: " + ", ".join(
+                f"{i['sha']} {i['subject'][:70]}" for i in rest[:3]
             )
     elif restarts or risky:
         out["assessment"] = (
             "No I/O remap touches the affected signals, but there were deploys/restarts before onset; "
-            "check whether the fault started after one of them before blaming hardware."
+            "check whether the fault started after one of them."
         )
     return {"assessment": out.pop("assessment"), **out} if "assessment" in out else out
+
+
+def _remap_activity(s3, src: store.Source, onset: datetime, changes: dict[str, Any], nulls: int) -> None:
+    """Was each remapped output actually written before onset? Appends the answer to the assessment."""
+    notes = []
+    for item in changes.get("io_changes_on_affected_risers", [])[:3]:
+        for m in item.get("matched", []):
+            try:
+                expr = sigs.resolve(m["signal"], src.host)["expr"]
+            except Exception:
+                continue
+            start = onset - timedelta(hours=24)
+            from_sql = src.from_sql(s3, start, onset)
+            if from_sql is None:
+                continue
+            _, rows = store.execute(
+                f"WITH b AS (SELECT timestamp ts, {expr} v FROM {from_sql} WHERE {src.time_where(start, onset - timedelta(seconds=5))}), "
+                "l AS (SELECT ts, v, lag(v) OVER (ORDER BY ts) pv FROM b) "
+                "SELECT CAST(max(ts) AS VARCHAR), count(*) FROM l WHERE v IS NOT NULL AND pv IS NOT NULL AND v <> pv"
+            )
+            last, n = rows[0] if rows else (None, 0)
+            m["value_changes_24h_before_onset"] = n
+            m["last_change_before_onset"] = last
+            if last is None:
+                notes.append(f"`{m['signal']}` did not change in the 24h before onset (no write to the remapped pin)")
+            else:
+                gap_h = (onset - _ts(last)).total_seconds() / 3600
+                notes.append(f"`{m['signal']}` last changed {last[:19]} ({gap_h:.1f}h before onset)")
+                if gap_h < 0.25:
+                    m["written_just_before_onset"] = True
+    if not notes:
+        return
+    any_recent = any(
+        m.get("written_just_before_onset") for i in changes.get("io_changes_on_affected_risers", []) for m in i.get("matched", [])
+    )
+    verdict = (
+        "The remapped output was written minutes before onset, so the remap is a plausible trigger."
+        if any_recent
+        else f"The remapped output was not written near onset{f' and {nulls} fields went null together' if nulls > 5 else ''}: "
+        "the remap is unlikely to be the trigger of this fault (it still affects that valve; see other faults)."
+    )
+    changes["mechanism"] = "; ".join(notes) + ". " + verdict
+    if changes.get("assessment"):
+        changes["assessment"] += " Mechanism check: " + changes["mechanism"]
 
 
 def recent_changes(host: str, at: str = "", signals: list[str] | None = None, hours: float = 72.0) -> dict[str, Any]:
     onset = _parse_when(at, store.now_utc())
     host = _source(store.s3_client(), host).host
-    return budget({"host": host, **changes_before(host, onset, signals or [], max(1.0, min(float(hours), 336.0)))})
+    hours = max(1.0, min(float(hours), 336.0))
+    return budget({"host": host, **changes_before(host, onset, [], hours, primary=signals or [])})
 
 
 def why_locked(host: str, at: str = "", lookback_hours: float = 6.0) -> dict[str, Any]:
@@ -553,6 +616,7 @@ ORDER BY timestamp LIMIT 5000
     try:
         primary = [s for ev in evaluated for s in ev.get("stale_inputs", [])]
         result["recent_changes"] = changes_before(src.host, edge_dt, affected, primary=primary)
+        _remap_activity(s3, src, edge_dt, result["recent_changes"], len(went_null))
     except Exception as exc:  # digest is advisory; never fail the lock analysis
         result["recent_changes"] = {"error": str(exc)[:200]}
 

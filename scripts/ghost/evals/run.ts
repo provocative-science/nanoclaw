@@ -12,6 +12,11 @@
  *   npx tsx scripts/ghost/evals/run.ts --dry-run              # print prompts only
  *   npx tsx scripts/ghost/evals/run.ts --score <run.json> --case <id>
  *
+ * To test unreleased container changes, build them under a separate tag
+ * (`./container/build.sh ghost-eval`) and run with
+ * CONTAINER_IMAGE=nanoclaw-agent:ghost-eval; a plain build.sh overwrites the
+ * :latest image that production spawns.
+ *
  * Isolation: a dedicated non-main group (telegram_ghost-eval) with evalMode on,
  * so nothing is sent to chat and nothing is written to the knowledge store.
  * Each case gets the context it would have had at its cutoff: a change digest

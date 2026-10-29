@@ -344,6 +344,14 @@ class ChangeCheckTests(unittest.TestCase):
         self.assertEqual([i["sha"] for i in out["io_changes_on_affected_risers"]], ["731e0e8fb", "2b2538e1c"])
         self.assertTrue(out["assessment"].startswith("731e0e8fb"))
         self.assertIn("OD7 → OD6", out["assessment"])
+        self.assertEqual(out["match"], "same riser", "a station dropout is not the remapped output's symptom")
+        with mock.patch.object(investigate.sigs, "load_digest", return_value=digest):
+            valve = investigate.changes_before(
+                "airbed-host", datetime(2026, 10, 29, 12, 45, tzinfo=timezone.utc), [],
+                primary=["desorb_tube_extraction_gas_out_valve"],
+            )
+        self.assertEqual(valve["match"], "direct")
+        self.assertIn("readback still follows the command", valve["assessment"])
         self.assertEqual(later["io_changes_on_affected_risers"], [], "not live before onset: no restart after the commit yet")
 
 
