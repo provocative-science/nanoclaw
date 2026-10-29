@@ -328,10 +328,11 @@ def _recovery_actions(body: str) -> list[str]:
 
 
 _MISSING_TRIP_RES = (
-    # `let Some(x) = x else { return Some(Box::new(Recovery…)) }` and `if let … {} else { return Some(…) }`
-    re.compile(r"\belse\s*\{\s*return\s+Some\(\s*Box::new\("),
+    # `let Some(x) = x else { return Some(Box::new(Recovery…)) }` and `if let … {} else { return Some(…) }`;
+    # check() may return `Some((Box::new(…), reason))` on newer branches
+    re.compile(r"\belse\s*\{\s*return\s+Some\(\s*\(?\s*Box::new\("),
     # `match x { None => return Some(Box::new(…)), … }`
-    re.compile(r"\bNone\s*=>\s*(?:\{\s*)?(?:return\s+)?Some\(\s*Box::new\("),
+    re.compile(r"\bNone\s*=>\s*(?:\{\s*)?(?:return\s+)?Some\(\s*\(?\s*Box::new\("),
 )
 
 

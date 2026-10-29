@@ -63,6 +63,10 @@ export interface ContainerInput {
   evalAllowGrafana?: boolean;
   /** Replay evals: knowledge entries hidden from the container (they encode the answer). */
   evalExcludeKb?: string[];
+  /** Replay evals: ghost data (dictionary + as-of change digest) mounted instead of the live one. */
+  evalGhostDir?: string;
+  /** Replay evals: code snapshot as of the cutoff, mounted at /workspace/extra/codebase. */
+  evalCodebaseDir?: string;
 }
 
 export interface ContainerOutput {
@@ -81,6 +85,8 @@ interface VolumeMount {
 interface EvalMountOptions {
   evalMode?: boolean;
   evalExcludeKb?: string[];
+  evalGhostDir?: string;
+  evalCodebaseDir?: string;
 }
 
 /** Replay evals: a scratch copy of `src` (minus excluded knowledge entries). */
@@ -173,9 +179,11 @@ function buildVolumeMounts(
   // Ghost investigation support, all read-only: host-generated signal
   // dictionary / change digest, the host-written knowledge store, and the
   // telemetry MCP source (so tool updates ship without an image rebuild).
-  fs.mkdirSync(GHOST_DATA_DIR, { recursive: true });
+  const ghostDir =
+    evalMode && evalOpts.evalGhostDir ? evalOpts.evalGhostDir : GHOST_DATA_DIR;
+  fs.mkdirSync(ghostDir, { recursive: true });
   mounts.push({
-    hostPath: GHOST_DATA_DIR,
+    hostPath: ghostDir,
     containerPath: '/workspace/ghost',
     readonly: true,
   });
@@ -309,6 +317,13 @@ function buildVolumeMounts(
     );
     mounts.push(...validatedMounts);
   }
+  if (evalMode && evalOpts.evalCodebaseDir) {
+    mounts.push({
+      hostPath: evalOpts.evalCodebaseDir,
+      containerPath: '/workspace/extra/codebase',
+      readonly: true,
+    });
+  }
 
   return mounts;
 }
@@ -378,6 +393,8 @@ export async function runContainerAgent(
   const mounts = buildVolumeMounts(group, input.isMain, {
     evalMode: input.evalMode,
     evalExcludeKb: input.evalExcludeKb,
+    evalGhostDir: input.evalGhostDir,
+    evalCodebaseDir: input.evalCodebaseDir,
   });
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;

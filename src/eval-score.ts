@@ -31,6 +31,8 @@ export interface EvalCase {
   /** Replay instant: the agent is told it is now, and telemetry after it is hidden. */
   cutoff: string;
   allow_grafana?: boolean;
+  /** Plant host the case is about; picks the deployed branch for the code snapshot. */
+  host?: string;
   messages?: { sender: string; time: string; text: string }[];
   alert_id?: string;
   alert?: Record<string, unknown>;

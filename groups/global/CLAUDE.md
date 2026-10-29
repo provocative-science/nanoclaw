@@ -202,14 +202,16 @@ Plant alerts and diagnostic questions ("why did airbed lock?", "what's wrong wit
 
 ### Workflow
 
-1. Read the `<briefing>` (status, lessons, recent alerts, **recent changes**: commits on active branches, restarts, operator chat). A deploy or restart just before a symptom is a leading hypothesis.
+1. Read the `<briefing>` (status, lessons, recent alerts, **recent changes**: device I/O remaps, commits on active branches, controller restarts, operator chat).
 2. Translate words into signals with **`mcp__telemetry__lookup_signal`** ("bag angle", "roots blower", "vent valve", "why locked"). It returns the S3 column, Prom name, units, GUI label, wiring, decode table and which supervisor rules read it. Never guess column paths.
 3. Use the purpose-built tools before raw SQL:
-   - **`why_locked(host, at)`**: lock/unlock edges, the watchdog that fired, its inputs at the edge (including stale/missing), fields that went null by station, restarts, console lines. Start here for any lock.
+   - **`why_locked(host, at)`**: lock/unlock edges, the watchdog that fired, its inputs at the edge (including stale/missing), fields that went null by station, restarts, console lines, and `recent_changes` for the affected signals. Start here for any lock.
+   - **`recent_changes(host, at, signals)`**: deploys, device I/O remaps and controller restarts before a fault, ranked by overlap with the affected signals and backplane risers. Run it for every non-lock fault too.
    - **`plant_snapshot(host, at)`**: the plant as the GUI shows it at one instant (controls on, values with units, nulls).
    - **`find_transitions(host, signals, start, end)`**: when did these signals change (edges, null gaps), e.g. `["supervisor.lock", "vent_or_bag_valve", "bag_angle < 6.5"]`.
 4. System references are in `/workspace/ghost/systems/*.md` (airbed, container, liquefaction, supervisor rules) and the dictionary in `/workspace/ghost/signals.json`. They are regenerated daily from co3ntrol-rs on the branch each host appears to run.
-5. Several hypotheses, each tested. Many fields going null at the same instant points to a device/IO (Modbus) fault before any process cause. A watchdog can trip on **missing inputs**, not only on out-of-range values.
+5. **Change check before any hardware, comms or process conclusion.** Our faults are most often caused by our own code and config changes. If the fault started after a controller restart that shipped a commit touching the same device (same signal, same backplane riser or station, same supervisor rule), that commit is the leading hypothesis: quote it (sha, author, what changed, e.g. "OD7 → OD6") and ask the author to confirm the change matches the wiring. Modbus exceptions, parity errors and a station dropping out are often *symptoms* of a bad pin map or write, not proof of a hardware fault. Report the change check in the Evidence section even when it finds nothing.
+6. Several hypotheses, each tested. A watchdog can trip on **missing inputs**, not only on out-of-range values, so find out *why* the inputs went missing.
 
 ### Output contract (alerts and diagnostic answers)
 
@@ -217,6 +219,7 @@ Plant alerts and diagnostic questions ("why did airbed lock?", "what's wrong wit
 *What happened:* one or two sentences, times in ET (UTC in parentheses for the key edge).
 *Root cause:* only if validated; otherwise "Not confirmed. Leading hypothesis: …"
 *Evidence*
+• Recent changes: <deploys / I/O remaps touching the affected device before onset, or "none found"> — recent_changes/why_locked
 • Validated: <hypothesis> — <tool/query> → <values>
 • Ruled out: <hypothesis> — <tool/query> → <values>
 • Inconclusive: <hypothesis> — <what is missing>
@@ -275,7 +278,8 @@ When someone asks what is in S3 / whether you can see telemetry logs:
 | `mcp__telemetry__query_range` | Time window + optional SELECT/WHERE (DuckDB) |
 | `mcp__telemetry__query_sql` | Raw read-only DuckDB SQL |
 | `mcp__telemetry__lookup_signal` | Plain words → signal (column path, Prom name, units, GUI label, wiring, rules) |
-| `mcp__telemetry__why_locked` | Supervisor lock explanation at an instant (watchdog, inputs, nulls, restarts) |
+| `mcp__telemetry__why_locked` | Supervisor lock explanation at an instant (watchdog, inputs, nulls, restarts, change check) |
+| `mcp__telemetry__recent_changes` | Deploys, device I/O remaps (pin changes) and controller restarts before a fault, ranked by overlap with the affected signals |
 | `mcp__telemetry__plant_snapshot` | GUI-style state of a host at an instant |
 | `mcp__telemetry__find_transitions` | Edges/gaps of several signals over a window |
 

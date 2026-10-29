@@ -14,6 +14,10 @@
  *
  * Isolation: a dedicated non-main group (telegram_ghost-eval) with evalMode on,
  * so nothing is sent to chat and nothing is written to the knowledge store.
+ * Each case gets the context it would have had at its cutoff: a change digest
+ * rebuilt as of then (scripts/ghost/change_digest.py --as-of) and a code
+ * snapshot of each codebase repo at its deployed branch's tip as of then
+ * (git archive, so later commits and fixes are not visible).
  * Grafana is only available for cases with allow_grafana (live Prom is not
  * time-cut, so those cases can see the future if the agent queries it).
  * Each run costs a full investigation (strongest model + verifier).
@@ -28,6 +32,7 @@ import { buildBriefing } from '../../../src/briefing.js';
 import {
   ASSISTANT_NAME,
   DATA_DIR,
+  GHOST_DATA_DIR,
   GROUPS_DIR,
   ONECLI_URL,
   TIMEZONE,
@@ -52,6 +57,95 @@ const HERE = path.dirname(new URL(import.meta.url).pathname);
 const CASES_DIR = path.join(HERE, 'cases');
 const EVAL_FOLDER = 'telegram_ghost-eval';
 const RUN_TIMEOUT_MS = 25 * 60_000;
+const CODEBASE_DIR =
+  process.env.NANOCLAW_CODEBASE_DIR ?? path.join(process.cwd(), 'codebase');
+
+interface ReplayContext {
+  ghostDir: string;
+  codebaseDir: string | null;
+}
+
+function git(repo: string, ...args: string[]): string {
+  return execFileSync('git', ['-C', repo, ...args], {
+    encoding: 'utf-8',
+    stdio: ['ignore', 'pipe', 'ignore'],
+  }).trim();
+}
+
+/** Dictionary + as-of digest + as-of code snapshot for one case. */
+function prepareReplayContext(c: EvalCase): ReplayContext {
+  const root = path.join(DATA_DIR, 'ghost-eval-replay', c.id);
+  fs.rmSync(root, { recursive: true, force: true });
+  const ghostDir = path.join(root, 'ghost');
+  fs.mkdirSync(ghostDir, { recursive: true });
+  for (const name of ['signals.json', 'systems']) {
+    const src = path.join(GHOST_DATA_DIR, name);
+    if (fs.existsSync(src))
+      fs.cpSync(src, path.join(ghostDir, name), { recursive: true });
+  }
+  const py = (
+    process.env.GHOST_PYTHON_CMD ?? 'uvx --with duckdb --with boto3 python'
+  ).split(/\s+/);
+  execFileSync(
+    py[0],
+    [
+      ...py.slice(1),
+      path.resolve(HERE, '..', 'change_digest.py'),
+      '--as-of',
+      new Date(Date.parse(c.cutoff)).toISOString(),
+      '--out-dir',
+      ghostDir,
+    ],
+    {
+      stdio: ['ignore', 'ignore', 'inherit'],
+      env: {
+        ...process.env,
+        GHOST_DATA_DIR,
+        NANOCLAW_CODEBASE_DIR: CODEBASE_DIR,
+        PYTHONDONTWRITEBYTECODE: '1',
+      },
+    },
+  );
+
+  if (!fs.existsSync(CODEBASE_DIR)) return { ghostDir, codebaseDir: null };
+  const digest = JSON.parse(
+    fs.readFileSync(path.join(ghostDir, 'change-digest.json'), 'utf-8'),
+  ) as { deployed_refs?: Record<string, string> };
+  const before = `--before=${new Date(Date.parse(c.cutoff)).toISOString()}`;
+  const codebaseDir = path.join(root, 'codebase');
+  for (const repo of fs.readdirSync(CODEBASE_DIR)) {
+    const repoDir = path.join(CODEBASE_DIR, repo);
+    if (!fs.existsSync(path.join(repoDir, '.git'))) continue;
+    const refs = [
+      repo === 'co3ntrol-rs' ? digest.deployed_refs?.[c.host ?? ''] : undefined,
+      'origin/main',
+      'origin/master',
+      'HEAD',
+    ].filter((r): r is string => !!r);
+    for (const ref of refs) {
+      let sha = '';
+      try {
+        sha = git(repoDir, 'log', '-1', before, '--format=%H', ref);
+      } catch {
+        continue;
+      }
+      if (!sha) continue;
+      const dest = path.join(codebaseDir, repo);
+      fs.mkdirSync(dest, { recursive: true });
+      const tar = execFileSync('git', ['-C', repoDir, 'archive', sha], {
+        maxBuffer: 512 * 1024 * 1024,
+      });
+      execFileSync('tar', ['-x', '-C', dest], { input: tar });
+      fs.writeFileSync(
+        path.join(dest, 'REPLAY_SNAPSHOT.txt'),
+        `${repo} at ${ref} as of ${c.cutoff}: ${sha}\n` +
+          'Snapshot without git history; recent commits and I/O remaps are in the change digest.\n',
+      );
+      break;
+    }
+  }
+  return { ghostDir, codebaseDir };
+}
 
 interface Args {
   cases: string[];
@@ -136,7 +230,7 @@ function buildAlertPrompt(c: EvalCase): string {
   });
 }
 
-function buildPrompt(c: EvalCase): string {
+function buildPrompt(c: EvalCase, ctx?: ReplayContext): string {
   const cutoff = Date.parse(c.cutoff);
   let body: string;
   let intentText: string;
@@ -157,13 +251,14 @@ function buildPrompt(c: EvalCase): string {
   }
   const briefing = buildBriefing(intentText, 'full', {
     now: cutoff,
-    includeDigest: false,
+    includeDigest: !!ctx,
+    ghostDataDir: ctx?.ghostDir,
     excludeEntryIds: c.exclude_kb,
     excludeAlertIds: c.alert_id ? [c.alert_id] : [],
   });
   const clock =
     `<replay>The current time is ${new Date(cutoff).toISOString()} (UTC). Treat it as now: ` +
-    'telemetry after it is not available yet, and recent-changes context is not included.</replay>\n\n';
+    'telemetry, commits and chat after it are not available.</replay>\n\n';
   return clock + briefing + body;
 }
 
@@ -189,7 +284,6 @@ function prepareGroup(): RegisteredGroup {
     recursive: true,
     force: true,
   });
-  const codebase = path.join(process.cwd(), 'codebase');
   return {
     name: 'Ghost evals',
     folder: EVAL_FOLDER,
@@ -197,15 +291,6 @@ function prepareGroup(): RegisteredGroup {
     added_at: new Date().toISOString(),
     requiresTrigger: false,
     isMain: false,
-    ...(fs.existsSync(codebase)
-      ? {
-          containerConfig: {
-            additionalMounts: [
-              { hostPath: codebase, containerPath: 'codebase', readonly: true },
-            ],
-          },
-        }
-      : {}),
   };
 }
 
@@ -227,6 +312,7 @@ async function runCase(
   args: Args,
   onecli: OneCLI,
 ): Promise<{ score: EvalScore; record: EvalRecord }> {
+  const ctx = prepareReplayContext(c);
   const group = prepareGroup();
   await onecli
     .ensureAgent({
@@ -247,7 +333,7 @@ async function runCase(
     await runContainerAgent(
       group,
       {
-        prompt: buildPrompt(c),
+        prompt: buildPrompt(c, ctx),
         groupFolder: EVAL_FOLDER,
         chatJid: 'eval:ghost',
         isMain: false,
@@ -263,6 +349,8 @@ async function runCase(
         evalMode: true,
         evalAllowGrafana: c.allow_grafana === true,
         evalExcludeKb: c.exclude_kb ?? [],
+        evalGhostDir: ctx.ghostDir,
+        ...(ctx.codebaseDir ? { evalCodebaseDir: ctx.codebaseDir } : {}),
       },
       () => undefined,
       async (output) => {
@@ -310,7 +398,9 @@ async function main(): Promise<void> {
   }
   if (args.dryRun) {
     for (const c of cases)
-      console.log(`\n===== ${c.id} (cutoff ${c.cutoff})\n${buildPrompt(c)}`);
+      console.log(
+        `\n===== ${c.id} (cutoff ${c.cutoff})\n${buildPrompt(c, prepareReplayContext(c))}`,
+      );
     return;
   }
 

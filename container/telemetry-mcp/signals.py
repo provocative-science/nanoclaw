@@ -49,6 +49,18 @@ def dictionary_path() -> Path | None:
     return None
 
 
+def load_digest() -> dict[str, Any] | None:
+    """Host change digest (commits, I/O remaps, restarts); None when the host job has not run."""
+    for base in _CANDIDATES:
+        p = Path(base) / "change-digest.json" if base else None
+        if p and p.exists():
+            try:
+                return json.loads(p.read_text(encoding="utf-8"))
+            except ValueError:
+                return None
+    return None
+
+
 def load() -> dict[str, Any]:
     global _cache, _cache_mtime
     path = dictionary_path()

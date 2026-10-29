@@ -16,8 +16,9 @@ export type BriefingLevel = 'compact' | 'full';
 
 export interface BriefingOptions {
   now?: number;
-  /** Replay evals: the digest describes the present, not the replayed moment. */
   includeDigest?: boolean;
+  /** Replay evals: directory holding a digest rebuilt as of the replayed moment. */
+  ghostDataDir?: string;
   /** Replay evals: knowledge entries that encode the expected answer. */
   excludeEntryIds?: string[];
   /** Replay evals: the alert being replayed (its archived brief is the old answer). */
@@ -126,8 +127,8 @@ function recentPlantEvents(now: number, excludeIds: Set<string>): string[] {
     );
 }
 
-function changeDigest(now: number): string | null {
-  const p = path.join(GHOST_DATA_DIR, 'change-digest-brief.md');
+function changeDigest(now: number, dir = GHOST_DATA_DIR): string | null {
+  const p = path.join(dir, 'change-digest-brief.md');
   if (!fs.existsSync(p)) return null;
   const age = now - fs.statSync(p).mtimeMs;
   const text = fs.readFileSync(p, 'utf-8').trim();
@@ -205,7 +206,10 @@ export function buildBriefing(
     const events = recentPlantEvents(now, new Set(opts.excludeAlertIds ?? []));
     if (events.length)
       parts.push('### Plant alerts in the last 72h', ...events);
-    const digest = opts.includeDigest === false ? null : changeDigest(now);
+    const digest =
+      opts.includeDigest === false
+        ? null
+        : changeDigest(now, opts.ghostDataDir);
     if (digest) parts.push(digest.replace(/^## /m, '### '));
     const review = entries.filter((e) => e.state === 'needs_review').length;
     if (review)

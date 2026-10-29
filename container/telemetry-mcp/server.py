@@ -364,11 +364,28 @@ def why_locked(host: str, at: str = "", lookback_hours: float = 6.0) -> str:
     lines around it (collapsed when repeating), fields that went null between the sample
     before and the edge (grouped by IO station — a device fault shows as many fields from one
     station going null), discrete changes, and evaluates each candidate watchdog's inputs at
-    the edge including staleness (get_if_valid max_sample_age). Also reports restarts and when
-    the lock cleared. Start every lock/watchdog investigation here.
+    the edge including staleness (get_if_valid max_sample_age). Also reports restarts, when
+    the lock cleared, and recent_changes: deploys and device I/O remaps that touched the
+    affected signals/risers before the edge. Start every lock/watchdog investigation here.
     """
     try:
         return _json(investigate.why_locked(host, at, lookback_hours))
+    except Exception as exc:
+        return _json({"error": str(exc)})
+
+
+@mcp.tool()
+def recent_changes(host: str, at: str = "", signals: list[str] | None = None, hours: float = 72.0) -> str:
+    """What changed before a fault on a host: code deploys, device I/O remaps, controller restarts.
+
+    `at` is the fault onset (default now). `signals` are the affected fields (e.g. the ones that
+    went null or misbehaved); remaps of those signals, or of other signals on the same backplane
+    riser, are ranked first. Run this for every fault before concluding hardware, comms or process
+    cause — a fault that starts after a deploy touching the same device is the leading hypothesis.
+    Reads the host change digest (hourly), so check digest_generated_at against the onset.
+    """
+    try:
+        return _json(investigate.recent_changes(host, at, signals, hours))
     except Exception as exc:
         return _json({"error": str(exc)})
 

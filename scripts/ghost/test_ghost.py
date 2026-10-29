@@ -61,6 +61,8 @@ class SourceParseTests(unittest.TestCase):
     def test_missing_input_trip_detection(self) -> None:
         self.assertTrue(sp.missing_input_trips(RULE))
         self.assertFalse(sp.missing_input_trips("if x < self.min { return Some(Box::new(R {})); } None"))
+        tuple_form = "if let (Some(a), Some(b)) = (a, b) { } else {\n return Some((Box::new(R { step: 0 }), \"\".into()));\n }"
+        self.assertTrue(sp.missing_input_trips(tuple_form))
         rules = sp.parse_rule_file(RULE, "bop")
         wd = next(r for r in rules if r["name"] == "warm_tank_level_watchdog")
         self.assertTrue(wd["missing_input_trips"])
@@ -161,6 +163,137 @@ class RunJobsTests(unittest.TestCase):
     def test_usage(self) -> None:
         proc = subprocess.run([str(HERE / "run_jobs.sh"), "nope"], capture_output=True, text=True)
         self.assertEqual(proc.returncode, 2)
+
+
+AIRBED_IO = """
+            controls: telemetry::AirbedControls {
+                vent_or_bag_valve: panel_station_riser_states[5]
+                    .and_then(|v| Some(!v.od_bit(4)? && v.od_bit(5)?)),
+                desorb_tube_extraction_gas_out_valve: panel_station_riser_states[5].and_then(|v| v.od_bit(PIN)),
+                hot_in_temperature: panel_station_riser_states[0]
+                    .and_then(|v| v.ntc_celsius(0)), // B14
+            }
+    pub async fn set_vent_or_bag_valve(&mut self, value: bool) -> Result<(), AirbedError> {
+        match backplane::set_od_pair(&mut self.ifc_modbus_panel_station, 5, 4, 5, value).await {
+            Ok(_) => Ok(()),
+        }
+    }
+
+    pub async fn set_desorb_tube_extraction_gas_out_valve(&mut self, value: bool) -> Result<(), AirbedError> {
+        match backplane::set_od(&mut self.ifc_modbus_panel_station, 5, PIN, value).await {
+            Ok(_) => Ok(()),
+        }
+    }
+"""
+
+
+class IoChangeTests(unittest.TestCase):
+    def setUp(self):
+        import io_changes
+
+        self.ic = io_changes
+
+    def test_parse_reads_and_writes(self):
+        m = self.ic.parse_io_map(AIRBED_IO.replace("PIN", "7"))
+        self.assertEqual(m["vent_or_bag_valve"]["read"], [("od_bit", 4), ("od_bit", 5)])
+        self.assertEqual(m["vent_or_bag_valve"]["write"], [4, 5])
+        self.assertEqual(m["desorb_tube_extraction_gas_out_valve"]["write"], [7])
+        self.assertEqual(m["hot_in_temperature"]["read"], [("ntc_celsius", 0)])
+        self.assertEqual(self.ic.riser_keys(m["vent_or_bag_valve"]), {"panel_station:5"})
+
+    def test_diff_detects_pin_swap(self):
+        before = self.ic.parse_io_map(AIRBED_IO.replace("PIN", "7"))
+        after = self.ic.parse_io_map(AIRBED_IO.replace("PIN", "6"))
+        changes = self.ic.diff_io_maps(before, after)
+        self.assertEqual(len(changes), 1)
+        ch = changes[0]
+        self.assertEqual((ch["signal"], ch["kind"], ch["risers"]), ("desorb_tube_extraction_gas_out_valve", "remapped", ["panel_station:5"]))
+        self.assertIn("OD7", ch["before"])
+        self.assertIn("OD6", ch["after"])
+
+    def test_rename_is_not_a_remap(self):
+        before = self.ic.parse_io_map(AIRBED_IO.replace("PIN", "7"))
+        after = self.ic.parse_io_map(AIRBED_IO.replace("PIN", "7").replace("vent_or_bag_valve", "bag_vent_valve"))
+        changes = self.ic.diff_io_maps(before, after)
+        self.assertEqual([(c["kind"], c.get("renamed_from")) for c in changes], [("renamed", "vent_or_bag_valve")])
+
+    def test_readback_write_mismatch_warns(self):
+        before = self.ic.parse_io_map(AIRBED_IO.replace("PIN", "7"))
+        text = AIRBED_IO.replace("od_bit(PIN)", "od_bit(7)").replace("5, PIN, value", "5, 6, value")
+        changes = self.ic.diff_io_maps(before, self.ic.parse_io_map(text))
+        self.assertIn("warning", changes[0])
+
+    def test_io_change_log_pairs_restarts_on_deployed_branch(self):
+        import change_digest as cd
+
+        commits = [
+            {
+                "sha": "731e0e8fb",
+                "when": "2026-10-28T16:02:17-04:00",
+                "authored": "2026-10-28T12:45:43-04:00",
+                "author": "Spark",
+                "subject": "drive extraction gas out on OD6",
+                "branches": ["ix/refactor-automation"],
+                "sample_files": ["control/src/system/airbed.rs"],
+                "io": {
+                    "remaps": [{"signal": "desorb_tube_extraction_gas_out_valve", "risers": ["panel_station:5"],
+                                "before": "OD7", "after": "OD6", "file": "control/src/system/airbed.rs"}],
+                    "excerpt": [],
+                },
+            }
+        ]
+        restarts = {"airbed-host": {"restarts": [{"ts": "2026-10-28 15:00:00+00"}, {"ts": "2026-10-28 21:03:04+00"}]}}
+        until = datetime(2026, 10, 29, 12, 30, tzinfo=timezone.utc)
+        log = cd.io_change_log(commits, restarts, {"airbed-host": "origin/ix/refactor-automation"}, until)
+        self.assertEqual(len(log), 1)
+        self.assertEqual(log[0]["restarts_since_authored"], ["2026-10-28 21:03:04+00"])
+        self.assertEqual(cd.io_change_log(commits, restarts, {"airbed-host": "origin/main"}, until), [])
+
+
+try:
+    sys.path.insert(0, str(HERE.parents[1] / "container" / "telemetry-mcp"))
+    import investigate  # noqa: E402
+
+    HAVE_INVESTIGATE = True
+except ImportError:  # duckdb not installed on this interpreter
+    HAVE_INVESTIGATE = False
+
+
+@unittest.skipUnless(HAVE_INVESTIGATE, "needs duckdb (run under uvx --with duckdb --with boto3)")
+class ChangeCheckTests(unittest.TestCase):
+    def test_stale_input_riser_outranks_newer_remap(self):
+        digest = {
+            "generated_at": "2026-10-29T12:30:00Z",
+            "deployed_refs": {"airbed-host": "origin/ix/refactor-automation"},
+            "io_map": {"airbed-host": {"signals": {
+                "vent_or_bag_valve": {"station": "panel_station", "riser": 5, "read": [["od_bit", 4]], "write": [4, 5]},
+                "extraction_vac_drain_valve": {"station": "panel_station", "riser": 2, "read": [["od_bit", 4]], "write": [4]},
+            }}},
+            "io_changes": [
+                {"host": "airbed-host", "branch": "ix/refactor-automation", "sha": "2b2538e1c", "author": "Spark",
+                 "authored": "2026-10-28T20:00:00Z", "subject": "riser 2 change",
+                 "remaps": [{"signal": "extraction_vac_vent_valve", "risers": ["panel_station:2"], "before": "OD6+OD7", "after": "OD6"}],
+                 "excerpt": [], "restarts_since_authored": ["2026-10-28 21:03:04+00"]},
+                {"host": "airbed-host", "branch": "ix/refactor-automation", "sha": "731e0e8fb", "author": "Spark",
+                 "authored": "2026-10-28T16:45:00Z", "subject": "drive extraction gas out on OD6",
+                 "remaps": [{"signal": "desorb_tube_extraction_gas_out_valve", "risers": ["panel_station:5"], "before": "OD7", "after": "OD6"}],
+                 "excerpt": [], "restarts_since_authored": ["2026-10-28 21:03:04+00"]},
+            ],
+            "restarts": {"airbed-host": {"restarts": [{"ts": "2026-10-28 21:03:04+00"}]}},
+            "commits": {"co3ntrol-rs": []},
+        }
+        onset = datetime(2026, 10, 29, 5, 42, 22, tzinfo=timezone.utc)
+        with mock.patch.object(investigate.sigs, "load_digest", return_value=digest):
+            out = investigate.changes_before(
+                "airbed-host", onset,
+                ["airbed.controls.vent_or_bag_valve", "airbed.controls.extraction_vac_drain_valve"],
+                primary=["control.vent_or_bag_valve"],
+            )
+            later = investigate.changes_before("airbed-host", datetime(2026, 10, 28, 18, 0, tzinfo=timezone.utc), ["airbed.controls.vent_or_bag_valve"])
+        self.assertEqual([i["sha"] for i in out["io_changes_on_affected_risers"]], ["731e0e8fb", "2b2538e1c"])
+        self.assertTrue(out["assessment"].startswith("731e0e8fb"))
+        self.assertIn("OD7 → OD6", out["assessment"])
+        self.assertEqual(later["io_changes_on_affected_risers"], [], "not live before onset: no restart after the commit yet")
 
 
 if __name__ == "__main__":

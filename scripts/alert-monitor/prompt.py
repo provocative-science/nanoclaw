@@ -103,7 +103,11 @@ Claims without evidence from this run get cut, so cite what you queried.
    - lock / watchdog / recovery: `mcp__telemetry__why_locked(host, at=<fired_at>)`
      — the watchdog that fired, its inputs at the edge (stale/missing counts:
      watchdogs trip on missing inputs), fields that went null by station,
-     restarts, console lines. Many fields null at once = device/IO fault first.
+     restarts, console lines, and `recent_changes` for the affected signals.
+   - every alert: `mcp__telemetry__recent_changes(host, at=<fired_at>,
+     signals=[affected fields])` — deploys, device I/O remaps (pin changes)
+     and controller restarts before onset, ranked by overlap with the
+     affected signals / backplane risers.
    - `mcp__telemetry__lookup_signal("<words>")` to map names to columns, Prom
      names, units, GUI labels and the supervisor rules that read them.
    - `mcp__telemetry__find_transitions(host, [signals], start, end)` for the
@@ -147,11 +151,16 @@ Claims without evidence from this run get cut, so cite what you queried.
    cause; telemetry interlocks often only say `supervisor` /
    "can't accept unforced commands while locked" and do not name the
    watchdog. Do not describe it as an automation job abort.
-4. Recent deploy / restart: if payload `recent_deploy.likely` is true, note
-   which host(s) show low `app.systick` uptime and weigh post-restart
-   startup against a true fault. Confirm with
-   `co3ntrol_systick{{subsystem="…"}}` in Grafana if useful. Remember: systick
-   reset ≠ proven git change (crash restart looks identical).
+4. Change check (always, before concluding hardware / comms / process cause):
+   our own code and config changes are the most common cause. If the fault
+   began after a controller restart that shipped a commit touching the same
+   signal, riser, station or supervisor rule, that commit is the leading
+   hypothesis: quote sha, author and the change (e.g. "OD7 → OD6") and ask
+   the author to confirm it matches the wiring. Modbus exceptions or a
+   station dropping out are often symptoms of a bad pin map or write. If
+   payload `recent_deploy.likely` is true, also weigh post-restart startup
+   against a true fault (`co3ntrol_systick{{subsystem="…"}}`). A systick
+   reset alone ≠ proven git change (crash restart looks identical).
 
 ## Container cycle phases (from container_system.py)
 The DAC/filter job cycles filters A–H. Operator-facing phase labels:
@@ -192,6 +201,7 @@ vs post-deploy/restart. Say "Root cause:" only when validated by the evidence
 below; otherwise "Not confirmed — leading hypothesis: …">
 
 *Evidence:*
+• Recent changes: <deploys / I/O remaps touching the affected device before onset, or "none found">
 • Validated: <hypothesis> — <tool/query> → <values, ET times>
 • Ruled out: <hypothesis> — <tool/query> → <values>
 • Inconclusive: <hypothesis> — <what is missing>

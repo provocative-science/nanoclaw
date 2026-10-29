@@ -245,6 +245,135 @@ def _collapse_console(lines: list[dict[str, Any]], max_items: int = 25) -> list[
     return [groups[k] for k in order[:max_items]]
 
 
+def _digest_ts(value: str) -> datetime:
+    dt = datetime.fromisoformat(value.replace(" ", "T").replace("Z", "+00:00"))
+    return (dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)).astimezone(timezone.utc)
+
+
+def _riser_keys(io: dict[str, Any] | None) -> set[str]:
+    if not io:
+        return set()
+    keys = set()
+    if io.get("read"):
+        keys.add(f"{io['station']}:{io['riser']}")
+    if io.get("write"):
+        keys.add(f"{io.get('write_station', io['station'])}:{io.get('write_riser', io['riser'])}")
+    return keys
+
+
+def changes_before(
+    host: str, onset: datetime, fields: list[str] | None = None, hours: float = 72.0, primary: list[str] | None = None
+) -> dict[str, Any]:
+    """Code changes and controller restarts before a fault, ranked by overlap with the affected signals/risers.
+
+    `primary` are the signals that directly caused the fault (e.g. a watchdog's stale inputs); remaps of
+    those signals, then of their risers, outrank remaps that only share a riser with other null fields.
+    """
+    digest = sigs.load_digest()
+    if not digest:
+        return {"note": "change digest unavailable (host job scripts/ghost/change_digest.py has not run)"}
+    generated = _digest_ts(digest["generated_at"])
+    window_start = onset - timedelta(hours=hours)
+    io_map = (digest.get("io_map") or {}).get(host, {}).get("signals", {})
+    leaves = {f.split(".")[-1] for f in fields or []}
+    affected_risers: set[str] = set()
+    for leaf in leaves:
+        affected_risers |= _riser_keys(io_map.get(leaf))
+    primary_leaves = {f.split(".")[-1] for f in primary or []}
+    primary_risers: set[str] = set()
+    for leaf in primary_leaves:
+        primary_risers |= _riser_keys(io_map.get(leaf))
+    leaves |= primary_leaves
+    affected_risers |= primary_risers
+
+    on_affected, other_io = [], []
+    for ch in digest.get("io_changes", []):
+        if ch.get("host") != host:
+            continue
+        authored = _digest_ts(ch["authored"])
+        if authored > onset:
+            continue
+        live = [r for r in ch.get("restarts_since_authored", []) if _digest_ts(r) <= onset]
+        item = {
+            "sha": ch["sha"],
+            "branch": ch["branch"],
+            "author": ch["author"],
+            "authored": ch["authored"],
+            "subject": ch["subject"],
+            "remaps": ch.get("remaps", []),
+            "excerpt": ch.get("excerpt", []),
+            "restarts_after_commit_before_onset": live,
+            "hours_before_onset": round((onset - authored).total_seconds() / 3600, 1),
+        }
+        hit = [
+            r
+            for r in ch.get("remaps", [])
+            if r["signal"] in leaves or (set(r.get("risers", [])) & affected_risers)
+        ]
+        if hit and live:
+            item["match_score"] = max(
+                3 if r["signal"] in primary_leaves else 2 if set(r.get("risers", [])) & primary_risers else 1 for r in hit
+            )
+            item["matched"] = [
+                {"signal": r["signal"], "risers": sorted(set(r.get("risers", [])) & affected_risers) or r.get("risers")}
+                for r in hit
+            ]
+            on_affected.append(item)
+        elif authored >= window_start:
+            other_io.append(item)
+
+    on_affected.sort(key=lambda i: (-i["match_score"], i["hours_before_onset"]))
+    host_restarts = ((digest.get("restarts") or {}).get(host) or {}).get("restarts", [])
+    restarts = [r["ts"] for r in host_restarts if window_start <= _digest_ts(r["ts"]) <= onset]
+    deployed_ref = (digest.get("deployed_refs") or {}).get(host, "origin/main").replace("origin/", "")
+    risky = []
+    for c in (digest.get("commits") or {}).get("co3ntrol-rs", []):
+        if deployed_ref in c.get("branches", []) and c.get("areas") and window_start <= _digest_ts(c["authored"]) <= onset:
+            risky.append({"sha": c["sha"], "authored": c["authored"], "subject": c["subject"], "areas": c["areas"]})
+
+    out: dict[str, Any] = {
+        "onset": onset.isoformat(),
+        "digest_generated_at": digest["generated_at"],
+        "deployed_branch": deployed_ref,
+        "io_changes_on_affected_risers": on_affected[:5],
+        "other_io_changes": other_io[:5],
+        "controller_restarts_before_onset": restarts[-10:],
+        "risky_commits_on_deployed_branch": risky[:10],
+    }
+    if generated < onset:
+        out["digest_note"] = "digest was generated before the fault; commits deployed after it are not listed"
+    if on_affected:
+        top = on_affected[0]
+        by_sig = {r["signal"]: r for r in top["remaps"]}
+        sigs_hit = "; ".join(
+            f"`{m['signal']}` on {'/'.join(m['risers'])}: {by_sig[m['signal']]['before']} → {by_sig[m['signal']]['after']}"
+            for m in top["matched"]
+        )
+        out["assessment"] = (
+            f"{top['sha']} ({top['author']}, {top['hours_before_onset']}h before onset: {top['subject']}) remapped {sigs_hit}, "
+            f"the same signals/risers that failed here, and the controller restarted after it "
+            f"(last {top['restarts_after_commit_before_onset'][-1][:19]}). Treat this deploy as the leading hypothesis "
+            "until ruled out: say so, quote the remap, and ask whether the pin change matches the wiring. "
+            "Do not conclude a hardware/comms fault without addressing it."
+        )
+        if len(on_affected) > 1:
+            out["assessment"] += " Also on affected risers (weaker match): " + ", ".join(
+                f"{i['sha']} {i['subject'][:70]}" for i in on_affected[1:3]
+            )
+    elif restarts or risky:
+        out["assessment"] = (
+            "No I/O remap touches the affected signals, but there were deploys/restarts before onset; "
+            "check whether the fault started after one of them before blaming hardware."
+        )
+    return {"assessment": out.pop("assessment"), **out} if "assessment" in out else out
+
+
+def recent_changes(host: str, at: str = "", signals: list[str] | None = None, hours: float = 72.0) -> dict[str, Any]:
+    onset = _parse_when(at, store.now_utc())
+    host = _source(store.s3_client(), host).host
+    return budget({"host": host, **changes_before(host, onset, signals or [], max(1.0, min(float(hours), 336.0)))})
+
+
 def why_locked(host: str, at: str = "", lookback_hours: float = 6.0) -> dict[str, Any]:
     s3 = store.s3_client()
     src = _source(s3, host)
@@ -402,12 +531,23 @@ ORDER BY timestamp LIMIT 5000
             ev["assessment"] = (
                 f"Inputs {stale} were missing/stale at the lock edge and this watchdog fires on missing inputs: "
                 "the lock is explained by missing telemetry, not by an out-of-range process value. "
-                "Find out why those fields went null (see fields_went_null_by_station and console errors)."
+                "Find out why those fields went null: recent_changes (deploys/I/O remaps on the same riser) first, "
+                "then fields_went_null_by_station and console errors."
             )
         evaluated.append(ev)
     result["watchdog_evaluation"] = evaluated
 
+    affected = [n["field"] for n in went_null] + [s for ev in evaluated for s in ev.get("stale_inputs", [])]
+    try:
+        primary = [s for ev in evaluated for s in ev.get("stale_inputs", [])]
+        result["recent_changes"] = changes_before(src.host, edge_dt, affected, primary=primary)
+    except Exception as exc:  # digest is advisory; never fail the lock analysis
+        result["recent_changes"] = {"error": str(exc)[:200]}
+
     summary = [f"Lock rose at {edge['ts']} on {src.host}."]
+    if result["recent_changes"].get("io_changes_on_affected_risers"):
+        top = result["recent_changes"]["io_changes_on_affected_risers"][0]
+        summary.append(f"RECENT CHANGE ON AFFECTED I/O: {top['sha']} {top['subject'][:90]} (see change_check).")
     if triggered:
         summary.append(f"Console names watchdog(s): {', '.join(triggered)}.")
     if recoveries_after:
@@ -421,8 +561,9 @@ ORDER BY timestamp LIMIT 5000
     if errors:
         summary.append(f"Console errors near edge: {errors[0]['message']} (x{errors[0]['count']}).")
     summary.append(f"Lock cleared at {clear_after['ts']}." if clear_after else "Lock not cleared by the end of the window (needs clear_lock).")
-    result["summary"] = summary
-    return budget(result)
+    # Summary and change check first: evidence logs and readers truncate long outputs from the end.
+    ordered = {"summary": summary, "change_check": result["recent_changes"].get("assessment") or "no recent changes found"}
+    return budget({**ordered, **result})
 
 
 # ---------------------------------------------------------------------------
