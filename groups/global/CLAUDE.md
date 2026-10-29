@@ -449,6 +449,7 @@ If **`/api/ds/query`** returns **200** with empty frames, the datasource is work
 - **Alloy on production nodes:** native **`alloy.service`** (systemd), config **`/etc/alloy/config.alloy`**, secrets **`/etc/default/alloy`** (`CO3NTROL_TOKEN`, `GC_PROM_*`, `SUBSYSTEM`, etc.). See **`ALLOY_README.md`** in **co3ntrol-rs**.
 - **Alloy debug UI:** `http://<node-ip>:12345` — scrape target should be **UP**; `401` means bad `CO3NTROL_TOKEN`.
 - **co3ntrol-rs:** listens on **`127.0.0.1:3000`**; GUI on **`:3333`**.
+- **Airbed logs on the host:** `ssh airbed-host` (user `ghost`, key `/opt/ghost-ssh/ghost_airbed`). Read `/var/log/co3ntrol/control-telemetry.log` and `control-console.log`. This is the live JSONL, ahead of the S3 parquet. Do not copy the private key out of the container.
 
 Never invent stack URLs or tokens; humans rotate credentials in Grafana / `/etc/default/alloy`.
 

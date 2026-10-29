@@ -308,6 +308,32 @@ function buildVolumeMounts(
     readonly: false,
   });
 
+  // Ghost's airbed SSH key. Not under ~/.ssh: additional mounts block that
+  // path, and the image's /home/node is mode 777, which OpenSSH rejects.
+  // Parents of /opt/ghost-ssh stay 755. Config is a system drop-in so
+  // `ssh airbed-host` finds the key without a writable home directory.
+  const ghostSshDir = path.join(
+    process.env.HOME || '/home/co2',
+    '.config',
+    'nanoclaw',
+    'ghost-ssh',
+  );
+  if (fs.existsSync(path.join(ghostSshDir, 'ghost_airbed'))) {
+    mounts.push({
+      hostPath: ghostSshDir,
+      containerPath: '/opt/ghost-ssh',
+      readonly: true,
+    });
+    const ghostSshConfig = path.join(ghostSshDir, 'airbed.conf');
+    if (fs.existsSync(ghostSshConfig)) {
+      mounts.push({
+        hostPath: ghostSshConfig,
+        containerPath: '/etc/ssh/ssh_config.d/ghost-airbed.conf',
+        readonly: true,
+      });
+    }
+  }
+
   // Additional mounts validated against external allowlist (tamper-proof from containers)
   if (group.containerConfig?.additionalMounts) {
     const validatedMounts = validateAdditionalMounts(
