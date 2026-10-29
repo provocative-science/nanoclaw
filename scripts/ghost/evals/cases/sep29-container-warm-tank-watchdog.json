@@ -1,0 +1,36 @@
+{
+  "id": "sep29-container-warm-tank-watchdog",
+  "kind": "alert",
+  "description": "Container watchdog_trigger alert plant-alert-1790657626-326 (payload has no watchdog name; Ghost must find it).",
+  "cutoff": "2026-09-29T04:53:46Z",
+  "alert_id": "plant-alert-1790657626-326",
+  "ground_truth": "Lock rose 04:53:18 UTC; console names warm_tank_level_watchdog; warm_tank_level_recovery ran; lock not cleared.",
+  "expect": {
+    "must_mention": [
+      {
+        "name": "names the watchdog",
+        "pattern": "warm[_ ]tank[_ ]level[_ ]watchdog"
+      }
+    ],
+    "must_not": [
+      {
+        "name": "does not blame liquefaction",
+        "pattern": "root cause[^\\n]{0,80}liquefaction"
+      }
+    ],
+    "must_call": [
+      {
+        "name": "used telemetry",
+        "pattern": "mcp__telemetry__"
+      }
+    ],
+    "evidence": [
+      {
+        "name": "watchdog seen in console",
+        "pattern": "warm_tank_level_watchdog"
+      }
+    ],
+    "contract": true,
+    "max_tool_calls": 35
+  }
+}

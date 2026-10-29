@@ -75,15 +75,34 @@ The `conversations/` folder contains searchable history of past conversations. U
 
 System-wide knowledge lives in **`/workspace/shared/`** — mounted read-write in every chat session. **Read these files** before answering questions about the physical system, contracts, calibration, operational history, or Notion data sources:
 
-- `notes.md` — safety reminders, business targets, Notion page/database IDs, operational events
 - `confluence-knowledge.md` — Confluence space summaries (when present)
 - `liquefaction-system.md` — process flow, chillers, V25 dewpoint vent, liquid routing, HAZOP bits, Modbus surfaces
 - `roadmap.md`, `contracts.md`, `liquefaction-calibration.md` — project context (when present)
 - **`plant-alerts/`** — shared plant alert archive (see below)
 
-When you learn something that applies to **all** chat sessions (not just this group), create or update files under **`/workspace/shared/`**. Keep group-specific context in **`/workspace/group/`**.
+Reference documents (process descriptions, calibration) can still go under **`/workspace/shared/`**. Short learnings, corrections, plant status and standing rules go in the **knowledge store** (below), not in files. `shared/notes.md` is retired. Keep group-specific context in **`/workspace/group/`**.
 
-Only the **main channel** should edit **`/workspace/global/CLAUDE.md`** (core instructions). Everyone can maintain shared notes in `/workspace/shared/`.
+Only the **main channel** should edit **`/workspace/global/CLAUDE.md`** (core instructions).
+
+### Knowledge store (shared memory across agents)
+
+Every chat and alert run shares one knowledge store, read-only at `/workspace/knowledge/entries/`. Use the **`mcp__nanoclaw__kb_*`** tools; never edit the files.
+
+The host already puts a `<briefing>` at the top of your prompt: standing rules, current plant status, and for investigations the relevant lessons, recent alerts and recent changes. Read it first. Search for more with `kb_search` (by topic, tag or system) before investigating, and `kb_get` for a full entry.
+
+| Kind | Use for | Who |
+|------|---------|-----|
+| `rule` | Standing instruction ("always…", "never…") | Main chat only |
+| `status` | Time-bound plant state ("container Prom scrape down", "sorbent due"). Must expire (default 7 days). Add a `check` when a query can tell whether it still holds; the host re-runs it hourly, extends it while it holds and auto-resolves it when it stops | Anyone |
+| `lesson` | Diagnostic lesson: what fooled us, what to check next time (signal names + query) | Anyone |
+| `correction` | An operator corrected you, or you found an earlier brief was wrong | Anyone |
+| `fact` | Stable reference: hosts, Notion IDs, wiring, semantics | Anyone |
+| `note` | Anything that doesn't fit the above | Anyone |
+
+- **Add** (`kb_add`) when an operator corrects you, when you learn something future runs would otherwise get wrong, or when plant state will matter for days. Not for one-off chat details. Search first, and if an entry exists, use `kb_supersede` with the reason.
+- **Close** with `kb_resolve`: `resolved` (status no longer true), `retracted` (it was wrong), `still_true` (refresh a status).
+- `confidence`: `unverified` (heard it) → `likely` (supported by data you checked) → `confirmed` (main chat only). Cite the evidence (query + values) in `evidence`.
+- You can only change your own unconfirmed entries. Anything else, including contradicting a confirmed entry, is queued for **Spark's review in his DM**, and the confirmed entry stays in force until he decides. Spark resolves review items by replying `still|resolved|confirm|retract <id>`.
 
 ### Plant alerts (follow-ups from any chat)
 
@@ -105,7 +124,7 @@ Do **not** assume the current chat’s Claude session transcript contains the al
 
 ### Notion MCP
 
-When configured, you have **`mcp__notion__*`** tools (Notion stdio MCP). Use them for databases and pages referenced in `shared/notes.md` — e.g. Container System Rider Log and BOP/DAC telemetry archives.
+When configured, you have **`mcp__notion__*`** tools (Notion stdio MCP). Use them for databases and pages listed in the knowledge store (`kb_search` "notion") — e.g. Container System Rider Log and BOP/DAC telemetry archives.
 
 When you learn something important (group-local):
 - Create files for structured data (e.g., `customers.md`, `preferences.md`)
@@ -177,6 +196,37 @@ Results are written to `/workspace/ipc/input/git_pull_result_*.json`. Wait a few
 
 `repo` must match a **directory name** under `codebase/` on the host. Expected checkouts: `co3ntrol-rs`, `co3ntrol-gui`, `high-pressure-co2-plc`, `backplane-firmware`, `riser-firmware`, `co2ntrol` (legacy).
 
+## Investigating plant problems: tools and evidence contract
+
+Plant alerts and diagnostic questions ("why did airbed lock?", "what's wrong with…") run on the strongest model with a second-model **skeptic review** before delivery. The reviewer checks every claim against your actual tool calls and outputs, so unsupported claims get cut or downgraded.
+
+### Workflow
+
+1. Read the `<briefing>` (status, lessons, recent alerts, **recent changes**: commits on active branches, restarts, operator chat). A deploy or restart just before a symptom is a leading hypothesis.
+2. Translate words into signals with **`mcp__telemetry__lookup_signal`** ("bag angle", "roots blower", "vent valve", "why locked"). It returns the S3 column, Prom name, units, GUI label, wiring, decode table and which supervisor rules read it. Never guess column paths.
+3. Use the purpose-built tools before raw SQL:
+   - **`why_locked(host, at)`**: lock/unlock edges, the watchdog that fired, its inputs at the edge (including stale/missing), fields that went null by station, restarts, console lines. Start here for any lock.
+   - **`plant_snapshot(host, at)`**: the plant as the GUI shows it at one instant (controls on, values with units, nulls).
+   - **`find_transitions(host, signals, start, end)`**: when did these signals change (edges, null gaps), e.g. `["supervisor.lock", "vent_or_bag_valve", "bag_angle < 6.5"]`.
+4. System references are in `/workspace/ghost/systems/*.md` (airbed, container, liquefaction, supervisor rules) and the dictionary in `/workspace/ghost/signals.json`. They are regenerated daily from co3ntrol-rs on the branch each host appears to run.
+5. Several hypotheses, each tested. Many fields going null at the same instant points to a device/IO (Modbus) fault before any process cause. A watchdog can trip on **missing inputs**, not only on out-of-range values.
+
+### Output contract (alerts and diagnostic answers)
+
+```
+*What happened:* one or two sentences, times in ET (UTC in parentheses for the key edge).
+*Root cause:* only if validated; otherwise "Not confirmed. Leading hypothesis: …"
+*Evidence*
+• Validated: <hypothesis> — <tool/query> → <values>
+• Ruled out: <hypothesis> — <tool/query> → <values>
+• Inconclusive: <hypothesis> — <what is missing>
+*Next step:* the concrete check or action for an operator.
+```
+
+- Every number comes from a tool output in this run (or a cited knowledge entry). No data = "inconclusive", never "fine".
+- Say which source each value came from (S3 parquet / Prom / Loki / knowledge entry) and how fresh it is.
+- If an operator corrects you, record it with `kb_add` (kind `correction`) once you have checked it.
+
 ## Coupled plant — feed path (liquefaction ↔ container)
 
 Liquefaction and the container (BOP/DAC) pod are a **coupled feed path**: container/BOP produces CO₂ → accumulator → liquefaction column.
@@ -214,7 +264,7 @@ When someone asks what is in S3 / whether you can see telemetry logs:
 
 1. `list_streams` — report hosts, buckets, date ranges, object counts.
 2. `query_range` on the requested host. Container ship: `host=bop-host` (aliases `container`, `container-ship`). Airbed: `host=airbed-host`.
-3. Grafana Prom empty for a subsystem is a **metrics** gap. S3 can still have JSON. Container/BOP Prom died 2026-09-15; **S3 `bop-host` telemetry in `provocative-dac-dev-a7f3` is still current.**
+3. Grafana Prom empty for a subsystem is a **metrics** gap. S3 can still have JSON. Check the briefing's plant status for known gaps (e.g. container Prom scrape).
 4. Grafana Prom empty for `subsystem="airbed"` does not mean airbed S3 is empty (`provocative-dac-dev-beef`, `host=airbed-host`).
 
 | Tool | Use |
@@ -224,6 +274,10 @@ When someone asks what is in S3 / whether you can see telemetry logs:
 | `mcp__telemetry__describe_schema` | Nested columns (`app.system.airbed.sensors.*`, `app.system.bop.sensors.*`, …) |
 | `mcp__telemetry__query_range` | Time window + optional SELECT/WHERE (DuckDB) |
 | `mcp__telemetry__query_sql` | Raw read-only DuckDB SQL |
+| `mcp__telemetry__lookup_signal` | Plain words → signal (column path, Prom name, units, GUI label, wiring, rules) |
+| `mcp__telemetry__why_locked` | Supervisor lock explanation at an instant (watchdog, inputs, nulls, restarts) |
+| `mcp__telemetry__plant_snapshot` | GUI-style state of a host at an instant |
+| `mcp__telemetry__find_transitions` | Edges/gaps of several signals over a window |
 
 **Key layouts**
 
@@ -279,7 +333,7 @@ Reference in **co3ntrol-rs**: `ALLOY_README.md`, `alloy/config.alloy.example`, `
 - **Stack URL:** `https://provocativerob.grafana.net` (configured in `groups/global/.mcp.json`).
 - **Prometheus/Mimir datasource:** **`grafanacloud-provocativerob-prom`** (uid **`grafanacloud-prom`**). Use **`query_prometheus`** (or Explore) against this datasource for liquefaction, airbed, and container/BOP telemetry.
 - **Node identity labels** (from Alloy `external_labels`, on every scraped series):
-  - **`subsystem`** — primary filter. Production values include **`liquefaction`** (lichost), **`airbed`** (pirate-host), **`container`** (bop-host).
+  - **`subsystem`** — primary filter. Production values include **`liquefaction`** (pirate-host), **`airbed`** (airbed-host), **`container`** (bop-host).
   - **`facility`**, **`system_id`** — site/system identifiers; use alongside `subsystem` when disambiguating.
 - **Do not filter on `host_name` or `service.name`** for current co3ntrol-rs metrics — those belonged to the **deprecated OTLP** pipeline.
 
@@ -410,7 +464,7 @@ Never invent stack URLs or tokens; humans rotate credentials in Grafana / `/etc/
 
 For any recurring task, use `schedule_task`. Frequent agent invocations — especially multiple times a day — consume API credits and can risk account restrictions. If a simple check can determine whether action is needed, add a `script` — it runs first, and the agent is only called when the check passes. This keeps invocations to a minimum.
 
-Optional `model` on `schedule_task` / `update_task`: `sonnet` (default), `opus`, `haiku`, `qwen`, or full IDs (`claude-sonnet-4-6`, `qwen3.6-35b`, etc.). Use `haiku` for script-gated format-only wakes; keep plant investigation on `sonnet`. `qwen` is light-path only (no tools/MCP) — cheap format/Q&A, not plant alerts. In chat, escalate with `/opus`, `/haiku`, `/sonnet`, `/qwen`, or `model:<id>` at the start of a message (after the @trigger).
+Optional `model` on `schedule_task` / `update_task`: `sonnet` (default), `investigation` (strongest model + skeptic review; use for plant diagnosis), `fable`, `opus`, `haiku`, `qwen`, or full IDs (`claude-sonnet-5`, `qwen3.6-35b`, etc.). Use `haiku` for script-gated format-only wakes. `qwen` is light-path only (no tools/MCP) — cheap format/Q&A, not plant alerts. In chat, escalate with `/fable`, `/opus`, `/haiku`, `/sonnet`, `/qwen`, or `model:<id>` at the start of a message (after the @trigger); diagnostic plant questions are promoted to the investigation tier automatically.
 
 ### How it works
 

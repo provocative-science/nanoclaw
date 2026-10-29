@@ -18,7 +18,7 @@ NanoClaw forwards **only** your turn's final assistant text to Telegram/
 WhatsApp. Mid-turn text followed by more tool calls is **not** delivered.
 Order of operations (required):
 
-1. Gather evidence (Grafana MCP / reads) — tool calls OK
+1. Gather evidence (telemetry tools / Grafana MCP / reads) — tool calls OK
 2. Write the shared archive (below) — tool calls OK; wrap chatter in
    `<internal>...</internal>`
 3. **Stop all tools.** Your **last** assistant message must be **only** the
@@ -87,12 +87,32 @@ Cross-subsystem guidance:
   as an explanation for container faults - the liquefaction system has no causal
   link that can result in upstream container faults.
 
-Read /workspace/shared/ notes if present for thresholds and recent ops context.
+The `<briefing>` at the top of this prompt has standing rules, current plant
+status (known telemetry gaps), relevant lessons, recent alerts and **recent
+changes** (commits on active branches, controller restarts, operator chat).
+Read it first; `mcp__nanoclaw__kb_search` finds more. A deploy or restart
+shortly before the alert is a leading hypothesis to test, not a conclusion.
 Also skim `/workspace/shared/plant-alerts/latest.md` for prior alert context.
 
+A second model reviews your brief against your tool calls before delivery.
+Claims without evidence from this run get cut, so cite what you queried.
+
 ## Evidence to gather before writing
+0. Start with the purpose-built telemetry tools (S3 archive, source of truth
+   for history; host `bop-host` = container, `airbed-host` = airbed):
+   - lock / watchdog / recovery: `mcp__telemetry__why_locked(host, at=<fired_at>)`
+     — the watchdog that fired, its inputs at the edge (stale/missing counts:
+     watchdogs trip on missing inputs), fields that went null by station,
+     restarts, console lines. Many fields null at once = device/IO fault first.
+   - `mcp__telemetry__lookup_signal("<words>")` to map names to columns, Prom
+     names, units, GUI labels and the supervisor rules that read them.
+   - `mcp__telemetry__find_transitions(host, [signals], start, end)` for the
+     timeline; `mcp__telemetry__plant_snapshot(host, at)` for GUI-style state.
+   Archive upload lags live by up to ~an hour; if the newest S3 sample is
+   before the alert, say so and lean on Prom / the monitor snapshot.
 1. Pull 15 minutes to few hours of context from Grafana MCP on grafanacloud-prom
-   (`co3ntrol_*`). For liquefaction alerts, query both
+   (`co3ntrol_*`) where that subsystem is scraped (check the briefing status
+   for Prom gaps). For liquefaction alerts, query both
    `subsystem="liquefaction"` and `subsystem="container"`. For container
    alerts, focus on `subsystem="container"`. Loki/PLC console if useful.
    Never use deprecated liquefaction_* / host_name schemas.
@@ -168,11 +188,13 @@ from the payload `fired_at` if needed. Keep the whole message concise
 
 *Brief evaluation:*
 <2–4 sentences: most likely class — fault vs transient vs blocked command
-vs post-deploy/restart — and why, citing evidence>
+vs post-deploy/restart. Say "Root cause:" only when validated by the evidence
+below; otherwise "Not confirmed — leading hypothesis: …">
 
-*System data:*
-<bullets with recent metric trends / state changes /divergences / lock-recovery context from
-Grafana or the alert snapshot>
+*Evidence:*
+• Validated: <hypothesis> — <tool/query> → <values, ET times>
+• Ruled out: <hypothesis> — <tool/query> → <values>
+• Inconclusive: <hypothesis> — <what is missing>
 
 *Next checks:*
 1. …

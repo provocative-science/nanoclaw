@@ -26,6 +26,12 @@ On servers (e.g. bob49) this checkout lives under **`~/provocative/nanoclaw`** �
 | `secrets/mcp.env.example` | Example MCP env vars (safe to commit) |
 | `secrets/mcp.env` | Real MCP env vars — **gitignored**; never commit or paste into tickets/chats |
 | `scripts/render-mcp.sh` | Sources `secrets/mcp.env`, renders template → every `groups/*/.mcp.json` |
+| `src/knowledge.ts` | Knowledge store (`data/knowledge/`, own git repo): entries, `kb_write` IPC, Spark's review commands |
+| `src/briefing.ts` | Per-run `<briefing>` (rules, statuses, lessons, recent alerts, change digest) prepended to prompts |
+| `src/intent.ts` | Chat vs investigation tier (investigation = strongest model + skeptic verifier) |
+| `container/agent-runner/src/verifier.ts` | Skeptic pass on investigation answers (different model, evidence log) |
+| `container/telemetry-mcp/` | Telemetry MCP (mounted read-only into containers): S3 tools + `lookup_signal`, `why_locked`, `plant_snapshot`, `find_transitions` |
+| `scripts/ghost/` | Host jobs: signal dictionary, change digest, knowledge recheck/gardener (`run_jobs.sh`, systemd units in `deploy/`), replay evals in `evals/` |
 
 ## Secrets / Credentials / Proxy (OneCLI)
 
@@ -58,6 +64,13 @@ Stdio MCP servers configured for groups read **`groups/{name}/.mcp.json`**. That
 **Grafana MCP:** the template uses the official `uvx mcp-grafana` invocation per Grafana docs. The **agent container image** installs `uv` / `uvx` (see `container/Dockerfile`) so that command works; wiring still comes from this envsubst pipeline and `loadGroupMcpServersFromDisk()` merging `groups/*/.mcp.json` into the SDK.
 
 **Plant telemetry MCP (Wasabi S3):** parquet dumps of co3ntrol-rs JSONL. Two buckets: **`provocative-dac-dev-beef`** (airbed nested hive) and **`provocative-dac-dev-a7f3`** (container-ship `telemetry/machine=bop-host/`). Set `TELEMETRY_S3_BUCKETS` in `secrets/mcp.env`. The stdio wrapper **unsets `HTTP(S)_PROXY`** (DuckDB httpfs cannot parse OneCLI proxy URLs). Tools are `mcp__telemetry__*`. Agent usage notes live in [`groups/global/CLAUDE.md`](groups/global/CLAUDE.md). Local Cursor: `scripts/run-telemetry-mcp.sh`.
+
+**Ghost investigation support:**
+
+- **Model tiers:** diagnostic plant questions and plant alerts (`plant-alert-*` tasks, model `investigation`) run on `NANOCLAW_INVESTIGATION_MODEL` (default `fable` = `claude-fable-5-1`, adaptive thinking, high effort) with SDK fallback `NANOCLAW_INVESTIGATION_FALLBACK_MODEL` (default `opus`). A skeptic pass on `GHOST_VERIFIER_MODEL` (default `opus`, never the investigator) reviews the answer against the tool evidence before delivery; `GHOST_VERIFIER=off` disables it. Chat stays on `NANOCLAW_DEFAULT_MODEL`.
+- **Knowledge store** (`data/knowledge/`, replaces `groups/global/shared/notes.md`): agents read it read-only at `/workspace/knowledge` and write through `mcp__nanoclaw__kb_*` → `kb_write` IPC; the host is the only writer and commits every change. Seeds in `scripts/ghost/knowledge-seed/` are imported on startup. Status entries carry machine checks (`scripts/ghost/kb_check.py`) re-run hourly; the weekly review goes to the main group (Spark's DM) and Spark answers `still|resolved|confirm|retract <id>` without an agent run.
+- **Host jobs:** `scripts/ghost/run_jobs.sh hourly|daily|weekly` (change digest + status recheck; signal dictionary + gardener; review). Install the units from `scripts/ghost/deploy/` into `~/.config/systemd/user/` and enable the three timers. Outputs land in `data/ghost/` (mounted read-only at `/workspace/ghost`).
+- **Replay evals:** `npx tsx scripts/ghost/evals/run.ts [--case id] [--repeat N]` from the checkout whose data you want; isolated group `telegram_ghost-eval`, telemetry cut off at each case's time, scores answer + tool evidence.
 
 **Observability (co3ntrol-rs / Grafana Cloud):** live Prom scrape → Alloy → Mimir/Loki, plus the S3 parquet archive, are documented for agents in [`groups/global/CLAUDE.md`](groups/global/CLAUDE.md) (mounted in containers as `/workspace/global/CLAUDE.md`).
 

@@ -39,7 +39,7 @@ def schedule_once(
         "schedule_value": schedule_value,
         "context_mode": "group",
         "targetJid": target_jid,
-        "model": "sonnet",
+        "model": "investigation",
     }
     if thread_id:
         payload["threadId"] = thread_id

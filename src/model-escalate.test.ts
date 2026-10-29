@@ -25,7 +25,7 @@ describe('parseModelEscalate', () => {
     const r = parseModelEscalate('@Ghost /opus dig into this lock');
     expect(r).toEqual({
       ok: true,
-      model: 'claude-opus-4-6',
+      model: 'claude-opus-5',
       cleanedContent: 'dig into this lock',
     });
   });
@@ -37,13 +37,23 @@ describe('parseModelEscalate', () => {
     ).toBe('claude-haiku-4-5');
     expect(parseModelEscalate('/sonnet plot dewpoint')).toMatchObject({
       ok: true,
-      model: 'claude-sonnet-4-6',
+      model: 'claude-sonnet-5',
       cleanedContent: 'plot dewpoint',
     });
     expect(parseModelEscalate('@Ghost /qwen say hi')).toMatchObject({
       ok: true,
       model: 'qwen3.6-35b',
       cleanedContent: 'say hi',
+    });
+  });
+
+  it('parses /fable', () => {
+    expect(
+      parseModelEscalate('@Ghost /fable why did airbed lock'),
+    ).toMatchObject({
+      ok: true,
+      model: 'claude-fable-5-1',
+      cleanedContent: 'why did airbed lock',
     });
   });
 
@@ -74,7 +84,7 @@ describe('parseModelEscalate', () => {
   it('allows slash with empty remainder', () => {
     expect(parseModelEscalate('/opus')).toMatchObject({
       ok: true,
-      model: 'claude-opus-4-6',
+      model: 'claude-opus-5',
       cleanedContent: '',
     });
   });
@@ -88,7 +98,7 @@ describe('findModelEscalateInMessages', () => {
     ]);
     expect(found?.result).toMatchObject({
       ok: true,
-      model: 'claude-opus-4-6',
+      model: 'claude-opus-5',
       cleanedContent: 'new',
     });
   });

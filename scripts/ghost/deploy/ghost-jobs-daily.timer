@@ -1,0 +1,11 @@
+[Unit]
+Description=NanoClaw Ghost daily jobs
+
+[Timer]
+OnCalendar=*-*-* 09:20:00
+Persistent=true
+RandomizedDelaySec=2min
+Unit=ghost-jobs@daily.service
+
+[Install]
+WantedBy=timers.target

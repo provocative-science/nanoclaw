@@ -11,8 +11,10 @@ import {
   CONTAINER_MAX_OUTPUT_SIZE,
   CONTAINER_TIMEOUT,
   DATA_DIR,
+  GHOST_DATA_DIR,
   GROUPS_DIR,
   IDLE_TIMEOUT,
+  KNOWLEDGE_DIR,
   ONECLI_URL,
   TIMEZONE,
 } from './config.js';
@@ -47,6 +49,20 @@ export interface ContainerInput {
   replyThreadId?: string;
   /** Concrete Anthropic model ID (host-normalized / allowlisted). */
   model?: string;
+  /** investigation: plant alert / diagnostic question — enables the skeptic verifier. */
+  tier?: 'investigation' | 'chat';
+  /** SDK fallback when the primary model is unavailable or overloaded. */
+  fallbackModel?: string;
+  /** Model for the skeptic pass (must differ from `model`). */
+  verifierModel?: string;
+  /** Replay evals: telemetry tools hide data after this instant. */
+  telemetryTimeCutoff?: string;
+  /** Replay evals: no outbound messages, no knowledge writes, no Grafana unless allowed. */
+  evalMode?: boolean;
+  /** Replay evals: keep Grafana (live Prom is not time-cut; for liquefaction cases). */
+  evalAllowGrafana?: boolean;
+  /** Replay evals: knowledge entries hidden from the container (they encode the answer). */
+  evalExcludeKb?: string[];
 }
 
 export interface ContainerOutput {
@@ -62,10 +78,35 @@ interface VolumeMount {
   readonly: boolean;
 }
 
+interface EvalMountOptions {
+  evalMode?: boolean;
+  evalExcludeKb?: string[];
+}
+
+/** Replay evals: a scratch copy of `src` (minus excluded knowledge entries). */
+function evalScratchCopy(
+  src: string,
+  name: string,
+  folder: string,
+  exclude: string[] = [],
+): string {
+  const scratch = path.join(DATA_DIR, `ghost-eval-${name}`, folder);
+  fs.rmSync(scratch, { recursive: true, force: true });
+  fs.mkdirSync(src, { recursive: true });
+  const hidden = new Set(exclude.map((id) => `${id}.md`));
+  fs.cpSync(src, scratch, {
+    recursive: true,
+    filter: (p) => !hidden.has(path.basename(p)) && path.basename(p) !== '.git',
+  });
+  return scratch;
+}
+
 function buildVolumeMounts(
   group: RegisteredGroup,
   isMain: boolean,
+  evalOpts: EvalMountOptions = {},
 ): VolumeMount[] {
+  const evalMode = evalOpts.evalMode === true;
   const mounts: VolumeMount[] = [];
   const projectRoot = process.cwd();
   const groupDir = resolveGroupFolderPath(group.folder);
@@ -118,14 +159,48 @@ function buildVolumeMounts(
     });
   }
 
-  // Shared system notes (read-write for all groups)
-  const sharedDir = path.join(globalDir, 'shared');
+  // Shared system notes (read-write for all groups). Replay evals get a
+  // throwaway copy so alert prompts cannot overwrite the live alert archive.
+  let sharedDir = path.join(globalDir, 'shared');
   fs.mkdirSync(sharedDir, { recursive: true });
+  if (evalMode) sharedDir = evalScratchCopy(sharedDir, 'shared', group.folder);
   mounts.push({
     hostPath: sharedDir,
     containerPath: '/workspace/shared',
     readonly: false,
   });
+
+  // Ghost investigation support, all read-only: host-generated signal
+  // dictionary / change digest, the host-written knowledge store, and the
+  // telemetry MCP source (so tool updates ship without an image rebuild).
+  fs.mkdirSync(GHOST_DATA_DIR, { recursive: true });
+  mounts.push({
+    hostPath: GHOST_DATA_DIR,
+    containerPath: '/workspace/ghost',
+    readonly: true,
+  });
+  const knowledgeDir = evalMode
+    ? evalScratchCopy(
+        KNOWLEDGE_DIR,
+        'knowledge',
+        group.folder,
+        evalOpts.evalExcludeKb,
+      )
+    : KNOWLEDGE_DIR;
+  fs.mkdirSync(knowledgeDir, { recursive: true });
+  mounts.push({
+    hostPath: knowledgeDir,
+    containerPath: '/workspace/knowledge',
+    readonly: true,
+  });
+  const telemetryMcpSrc = path.join(projectRoot, 'container', 'telemetry-mcp');
+  if (fs.existsSync(path.join(telemetryMcpSrc, 'server.py'))) {
+    mounts.push({
+      hostPath: telemetryMcpSrc,
+      containerPath: '/app/telemetry-mcp',
+      readonly: true,
+    });
+  }
 
   // Per-group Claude sessions directory (isolated from other groups)
   // Each group gets their own .claude/ to prevent cross-group session access
@@ -205,13 +280,16 @@ function buildVolumeMounts(
     'agent-runner-src',
   );
   if (fs.existsSync(agentRunnerSrc)) {
-    const srcIndex = path.join(agentRunnerSrc, 'index.ts');
     const cachedIndex = path.join(groupAgentRunnerDir, 'index.ts');
+    const newestSrc = Math.max(
+      ...fs
+        .readdirSync(agentRunnerSrc)
+        .map((f) => fs.statSync(path.join(agentRunnerSrc, f)).mtimeMs),
+    );
     const needsCopy =
       !fs.existsSync(groupAgentRunnerDir) ||
       !fs.existsSync(cachedIndex) ||
-      (fs.existsSync(srcIndex) &&
-        fs.statSync(srcIndex).mtimeMs > fs.statSync(cachedIndex).mtimeMs);
+      newestSrc > fs.statSync(cachedIndex).mtimeMs;
     if (needsCopy) {
       fs.cpSync(agentRunnerSrc, groupAgentRunnerDir, { recursive: true });
     }
@@ -297,7 +375,10 @@ export async function runContainerAgent(
   const groupDir = resolveGroupFolderPath(group.folder);
   fs.mkdirSync(groupDir, { recursive: true });
 
-  const mounts = buildVolumeMounts(group, input.isMain);
+  const mounts = buildVolumeMounts(group, input.isMain, {
+    evalMode: input.evalMode,
+    evalExcludeKb: input.evalExcludeKb,
+  });
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
   // Main group uses the default OneCLI agent; others use their own agent.

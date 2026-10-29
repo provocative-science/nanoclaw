@@ -1,0 +1,51 @@
+{
+  "id": "aug16-warm-tank-watchdog",
+  "kind": "chat",
+  "known_miss": true,
+  "description": "Container lock 2026-08-16 12:30:33 UTC. Ghost said the warm tank level watchdog fired despite the level being OK, so the sensor must not have been reading.",
+  "cutoff": "2026-08-16T14:56:55Z",
+  "messages": [
+    {
+      "sender": "Vinay",
+      "time": "2026-08-16T14:56:55Z",
+      "text": "Ghost, can you figure out what triggered the interlock supervisor? Was there a pressure that wasn't low enough, or something else?"
+    }
+  ],
+  "ground_truth": "warm_tank_level_watchdog (min 14.0, max 46.0, applies while warm/hot loop pumps are enabled). Warm tank level was valid and fell to 13.99 at the edge with both loop pumps on: a real low-level trip, not a missing sensor. warm_tank_level_recovery ran; lock stayed set.",
+  "expect": {
+    "must_mention": [
+      {
+        "name": "names the watchdog",
+        "pattern": "warm[_ ]tank[_ ]level[_ ]watchdog|warm tank (level )?watchdog"
+      },
+      {
+        "name": "level below the 14 minimum",
+        "pattern": "(13\\.9|below (the )?(min|14)|under 14|< ?14|minimum of 14|14(\\.0)? (min|limit|threshold))"
+      }
+    ],
+    "must_not": [
+      {
+        "name": "does not blame a non-reading sensor",
+        "pattern": "(sensor|reading) (was ?n.t|wasn't|not) (reading|reporting|valid)|stale (sensor|reading) (caused|tripped|triggered)|missing (sensor )?(data|reading) (caused|tripped|triggered)"
+      }
+    ],
+    "must_call": [
+      {
+        "name": "used telemetry",
+        "pattern": "mcp__telemetry__"
+      }
+    ],
+    "evidence": [
+      {
+        "name": "watchdog seen in console",
+        "pattern": "warm_tank_level_watchdog"
+      },
+      {
+        "name": "level value at the edge",
+        "pattern": "13\\.99"
+      }
+    ],
+    "contract": true,
+    "max_tool_calls": 40
+  }
+}

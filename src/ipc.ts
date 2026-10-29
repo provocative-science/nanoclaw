@@ -9,6 +9,7 @@ import { DATA_DIR, IPC_POLL_INTERVAL, TIMEZONE } from './config.js';
 import { AvailableGroup } from './container-runner.js';
 import { createTask, deleteTask, getTaskById, updateTask } from './db.js';
 import { isValidGroupFolder } from './group-folder.js';
+import { handleKbWrite } from './knowledge.js';
 import { logger } from './logger.js';
 import { modelAllowlistHint, normalizeModel } from './model.js';
 import { stripInternalTags } from './router.js';
@@ -774,6 +775,17 @@ export async function processTaskIpc(
       }
       break;
     }
+
+    case 'kb_write':
+      if (!registeredGroupForFolder(registeredGroups, sourceGroup)) {
+        logger.warn(
+          { sourceGroup },
+          'kb_write from unregistered group ignored',
+        );
+        break;
+      }
+      await handleKbWrite(data as Record<string, unknown>, sourceGroup, isMain);
+      break;
 
     default:
       logger.warn({ type: data.type }, 'Unknown IPC task type');

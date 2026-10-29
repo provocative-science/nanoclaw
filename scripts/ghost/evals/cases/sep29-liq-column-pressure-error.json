@@ -1,0 +1,29 @@
+{
+  "id": "sep29-liq-column-pressure-error",
+  "kind": "alert",
+  "allow_grafana": true,
+  "description": "Liquefaction ERROR with HAZOP bit 4 column pressure low (plant-alert-1790669897-587). Correct practice: check container/accumulator feed upstream and say whether it explains the low column pressure.",
+  "cutoff": "2026-09-29T08:18:12Z",
+  "alert_id": "plant-alert-1790669897-587",
+  "ground_truth": "Not labeled beyond the payload: accumulator ~82-86 psi (below the ~100 psi feed rule of thumb). Scored on method: upstream feed check, decoded bit, evidence contract.",
+  "expect": {
+    "must_mention": [
+      {
+        "name": "column pressure low (bit 4)",
+        "pattern": "column pressure"
+      },
+      {
+        "name": "checked upstream accumulator/container feed",
+        "pattern": "accumulator"
+      }
+    ],
+    "must_call": [
+      {
+        "name": "queried Prom or telemetry",
+        "pattern": "mcp__(grafana__query_prometheus|telemetry__)"
+      }
+    ],
+    "contract": true,
+    "max_tool_calls": 35
+  }
+}

@@ -20,7 +20,16 @@ import { GroupQueue } from './group-queue.js';
 import { resolveGroupFolderPath } from './group-folder.js';
 import { runLightCompletion } from './light-llm.js';
 import { logger } from './logger.js';
-import { isLightModel, normalizeModel, resolveDefaultModel } from './model.js';
+import {
+  isLightModel,
+  normalizeModel,
+  resolveDefaultModel,
+  resolveInvestigationFallbackModel,
+  resolveInvestigationModel,
+  resolveVerifierModel,
+} from './model.js';
+import { buildBriefing } from './briefing.js';
+import { classifyIntent, RunTier } from './intent.js';
 import { runTaskScript } from './task-script.js';
 import { RegisteredGroup, ScheduledTask } from './types.js';
 
@@ -188,6 +197,12 @@ async function runTask(
         : undefined;
 
     const resolvedModel = normalizeModel(task.model) ?? resolveDefaultModel();
+    const tier: RunTier =
+      task.id.startsWith('plant-alert-') ||
+      resolvedModel === resolveInvestigationModel() ||
+      classifyIntent(task.prompt) === 'investigation'
+        ? 'investigation'
+        : 'chat';
 
     // Light-path models: host OpenAI-compat (optional host script), no container
     if (isLightModel(resolvedModel)) {
@@ -240,7 +255,11 @@ async function runTask(
       const output = await runContainerAgent(
         group,
         {
-          prompt: task.prompt,
+          prompt:
+            buildBriefing(
+              task.prompt,
+              tier === 'investigation' ? 'full' : 'compact',
+            ) + task.prompt,
           sessionId,
           groupFolder: task.group_folder,
           chatJid: task.chat_jid,
@@ -250,6 +269,13 @@ async function runTask(
           script: task.script || undefined,
           replyThreadId,
           model: resolvedModel,
+          tier,
+          ...(tier === 'investigation'
+            ? {
+                fallbackModel: resolveInvestigationFallbackModel(),
+                verifierModel: resolveVerifierModel(resolvedModel),
+              }
+            : {}),
         },
         (proc, containerName) =>
           deps.onProcess(task.chat_jid, proc, containerName, task.group_folder),

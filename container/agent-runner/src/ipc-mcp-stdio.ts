@@ -21,8 +21,14 @@ const groupFolder = process.env.NANOCLAW_GROUP_FOLDER!;
 const isMain = process.env.NANOCLAW_IS_MAIN === '1';
 const replyThreadIdFromHost =
   process.env.NANOCLAW_REPLY_THREAD_ID?.trim() || undefined;
+/** Replay evals: nothing leaves the container; writes are captured for scoring. */
+const evalMode = process.env.NANOCLAW_EVAL_MODE === '1';
+const EVAL_CAPTURE_DIR = '/workspace/group/eval-ipc';
+const KNOWLEDGE_ENTRIES_DIR = '/workspace/knowledge/entries';
+const INPUT_DIR = path.join(IPC_DIR, 'input');
 
 function writeIpcFile(dir: string, data: object): string {
+  if (evalMode) dir = path.join(EVAL_CAPTURE_DIR, path.basename(dir));
   fs.mkdirSync(dir, { recursive: true });
 
   const filename = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}.json`;
@@ -424,6 +430,200 @@ Use available_groups.json to find the JID for a group. The folder name must be c
     return {
       content: [{ type: 'text' as const, text: `Group "${args.name}" registered. It will start receiving messages immediately.` }],
     };
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Knowledge store (read directly from the read-only mount; writes via host IPC)
+// ---------------------------------------------------------------------------
+
+interface KbEntry {
+  id: string;
+  kind: string;
+  title: string;
+  tags: string[];
+  systems?: string[];
+  state: string;
+  confidence: string;
+  updated?: string;
+  expires?: string;
+  last_check?: { at?: string; result?: 'holds' | 'no_longer_holds' | 'error'; detail?: string };
+  body: string;
+  raw: string;
+}
+
+function parseKbEntry(raw: string): KbEntry | null {
+  const match = raw.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
+  if (!match) return null;
+  const fields: Record<string, unknown> = {};
+  for (const line of match[1].split('\n')) {
+    const idx = line.indexOf(':');
+    if (idx < 0) continue;
+    const value = line.slice(idx + 1).trim();
+    try {
+      fields[line.slice(0, idx).trim()] = JSON.parse(value);
+    } catch {
+      fields[line.slice(0, idx).trim()] = value;
+    }
+  }
+  return { ...(fields as Omit<KbEntry, 'body' | 'raw'>), tags: (fields.tags as string[]) || [], body: match[2].trim(), raw };
+}
+
+function loadKbEntries(): KbEntry[] {
+  if (!fs.existsSync(KNOWLEDGE_ENTRIES_DIR)) return [];
+  const out: KbEntry[] = [];
+  for (const file of fs.readdirSync(KNOWLEDGE_ENTRIES_DIR)) {
+    if (!file.endsWith('.md')) continue;
+    const entry = parseKbEntry(fs.readFileSync(path.join(KNOWLEDGE_ENTRIES_DIR, file), 'utf-8'));
+    if (entry) out.push(entry);
+  }
+  return out;
+}
+
+const tokens = (text: string) =>
+  new Set((text.toLowerCase().match(/[a-z0-9_]{3,}/g) || []).filter((t) => !['the', 'and', 'for', 'with', 'was', 'are'].includes(t)));
+
+function kbSummary(e: KbEntry): string {
+  const extra = [
+    e.expires ? `expires ${e.expires.slice(0, 10)}` : '',
+    e.last_check?.at ? `check ${e.last_check.result ?? 'error'} @${e.last_check.at.slice(0, 16)}` : '',
+  ].filter(Boolean).join(', ');
+  const body = e.body.replace(/\s+/g, ' ').slice(0, 220);
+  return `- ${e.id} [${e.kind}/${e.state}/${e.confidence}] ${e.title}${extra ? ` (${extra})` : ''}\n  tags: ${e.tags.join(', ')}\n  ${body}${e.body.length > 220 ? '…' : ''}`;
+}
+
+async function kbWrite(payload: Record<string, unknown>): Promise<{ text: string; isError: boolean }> {
+  if (evalMode) return { text: 'Eval mode: knowledge writes are disabled.', isError: false };
+  const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  writeIpcFile(TASKS_DIR, { type: 'kb_write', requestId, ...payload, timestamp: new Date().toISOString() });
+  const resultPath = path.join(INPUT_DIR, `kb_result_${requestId}.json`);
+  for (let i = 0; i < 60; i++) {
+    await new Promise((r) => setTimeout(r, 500));
+    if (!fs.existsSync(resultPath)) continue;
+    try {
+      const result = JSON.parse(fs.readFileSync(resultPath, 'utf-8')) as { ok: boolean; message: string };
+      fs.unlinkSync(resultPath);
+      return { text: result.message, isError: !result.ok };
+    } catch {
+      /* partially written; retry */
+    }
+  }
+  return { text: 'Knowledge write queued but no confirmation within 30s; check with kb_search before retrying.', isError: true };
+}
+
+const checkSchema = z
+  .object({
+    type: z.enum(['stream_fresh', 's3_sql', 'prom']),
+    host: z.string().optional().describe('stream_fresh: telemetry host, e.g. airbed-host or bop-host'),
+    stream: z.string().optional().describe('stream_fresh: telemetry (default) or console'),
+    max_age_hours: z.number().optional().describe('stream_fresh: fresh when newest object is younger than this'),
+    sql: z.string().optional().describe('s3_sql: DuckDB query over the plant archive returning one scalar (same SQL as mcp__telemetry__query_sql)'),
+    query: z.string().optional().describe('prom: PromQL instant query returning one scalar'),
+    op: z.enum(['<', '<=', '>', '>=', '==', '!=']).optional(),
+    value: z.union([z.number(), z.string(), z.boolean()]).optional(),
+    holds_when: z.boolean().optional().describe('The status is true while the check result equals this (default true)'),
+  })
+  .describe('Machine check the host runs hourly: while it holds the status stays, when it stops holding the status auto-resolves.');
+
+server.tool(
+  'kb_search',
+  'Search the shared knowledge store (rules, plant status, lessons, corrections, facts, notes) before investigating or answering. Active entries only unless include_inactive. Returns id, kind/state/confidence, title and a body excerpt; use kb_get for the full entry.',
+  {
+    query: z.string().optional().describe('Free text; matched against title, tags and body'),
+    kind: z.enum(['rule', 'status', 'lesson', 'correction', 'fact', 'note']).optional(),
+    tags: z.array(z.string()).optional(),
+    system: z.string().optional().describe('airbed | container | liquefaction | …'),
+    include_inactive: z.boolean().optional(),
+    limit: z.number().int().min(1).max(40).optional(),
+  },
+  async (args) => {
+    const q = tokens(args.query || '');
+    const wantTags = (args.tags || []).map((t) => t.toLowerCase());
+    const scored = loadKbEntries()
+      .filter((e) => args.include_inactive || e.state === 'active' || e.state === 'needs_review')
+      .filter((e) => !args.kind || e.kind === args.kind)
+      .filter((e) => !args.system || (e.systems || []).includes(args.system.toLowerCase()) || e.tags.includes(args.system.toLowerCase()))
+      .filter((e) => wantTags.every((t) => e.tags.includes(t)))
+      .map((e) => {
+        if (q.size === 0) return { e, score: 1 };
+        const title = tokens(`${e.title} ${e.tags.join(' ')}`);
+        const body = tokens(e.body);
+        let score = 0;
+        for (const t of q) score += (title.has(t) ? 3 : 0) + (body.has(t) ? 1 : 0);
+        return { e, score };
+      })
+      .filter((s) => s.score > 0)
+      .sort((a, b) => b.score - a.score || String(b.e.updated).localeCompare(String(a.e.updated)))
+      .slice(0, args.limit ?? 15);
+    if (scored.length === 0) return { content: [{ type: 'text' as const, text: 'No matching knowledge entries.' }] };
+    return { content: [{ type: 'text' as const, text: scored.map((s) => kbSummary(s.e)).join('\n') }] };
+  },
+);
+
+server.tool(
+  'kb_get',
+  'Read one knowledge entry in full (frontmatter + body). History: the host keeps every change in git.',
+  { id: z.string().describe('Entry id, e.g. k-20261029-a1b2c3') },
+  async (args) => {
+    if (!/^k-[\w-]+$/.test(args.id)) return { content: [{ type: 'text' as const, text: 'Invalid id.' }], isError: true };
+    const p = path.join(KNOWLEDGE_ENTRIES_DIR, `${args.id}.md`);
+    if (!fs.existsSync(p)) return { content: [{ type: 'text' as const, text: `No entry ${args.id}.` }], isError: true };
+    return { content: [{ type: 'text' as const, text: fs.readFileSync(p, 'utf-8') }] };
+  },
+);
+
+const entryFields = {
+  kind: z.enum(['rule', 'status', 'lesson', 'correction', 'fact', 'note']).describe('rule = standing instruction (main chat only); status = time-bound plant state (must expire); lesson = diagnostic lesson; correction = something an agent got wrong; fact = stable reference; note = anything else'),
+  title: z.string().describe('One line, 5-160 chars, specific (what + where)'),
+  body: z.string().describe('Markdown. For lessons/corrections: what happened, what is true, how to check next time (signal names + query).'),
+  tags: z.array(z.string()).min(1).describe('Lowercase topic tags, e.g. ["extraction-bag", "watchdog", "airbed"]'),
+  systems: z.array(z.string()).optional().describe('airbed | container | liquefaction | infra'),
+  source: z.string().describe('Where this came from: chat message, alert id, tool call + timestamp'),
+  confidence: z.enum(['confirmed', 'likely', 'unverified']).optional().describe('Only the main chat can mark confirmed'),
+  evidence: z.array(z.string()).optional().describe('Queries/values that support it'),
+  ttl_days: z.number().optional().describe('status: days until expiry (default 7, max 90)'),
+  expires: z.string().optional().describe('status: ISO expiry instead of ttl_days'),
+  check: checkSchema.optional(),
+};
+
+server.tool(
+  'kb_add',
+  'Add a knowledge entry for other agents and future runs. Use for durable lessons and corrections from operators, and for plant status that will matter for days (give status a check when a query can tell whether it still holds). Do not add one-off chat details. Search first; if an entry already covers it, use kb_supersede.',
+  entryFields,
+  async (args) => {
+    const r = await kbWrite({ op: 'add', entry: args });
+    return { content: [{ type: 'text' as const, text: r.text }], isError: r.isError };
+  },
+);
+
+server.tool(
+  'kb_supersede',
+  'Replace an existing entry with a corrected/updated one (the old one is kept as superseded). If the old entry is confirmed and you are not the main chat, the new one is queued for Spark\'s review as a contradiction instead.',
+  {
+    id: z.string().describe('Entry being replaced'),
+    reason: z.string().describe('Why it changed (evidence)'),
+    ...entryFields,
+    kind: entryFields.kind.optional(),
+    tags: entryFields.tags.optional(),
+  },
+  async (args) => {
+    const { id, reason, ...entry } = args;
+    const r = await kbWrite({ op: 'supersede', id, reason, entry });
+    return { content: [{ type: 'text' as const, text: r.text }], isError: r.isError };
+  },
+);
+
+server.tool(
+  'kb_resolve',
+  'Close or refresh an entry: resolved (status no longer true), retracted (was wrong), still_true (refresh a status expiry). Outside the main chat you may only change your own unconfirmed entries; anything else is queued for Spark\'s review.',
+  {
+    id: z.string(),
+    outcome: z.enum(['resolved', 'retracted', 'still_true']),
+    reason: z.string().describe('Evidence for the change'),
+  },
+  async (args) => {
+    const r = await kbWrite({ op: 'resolve', id: args.id, outcome: args.outcome, reason: args.reason });
+    return { content: [{ type: 'text' as const, text: r.text }], isError: r.isError };
   },
 );
 

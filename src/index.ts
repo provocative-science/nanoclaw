@@ -81,7 +81,20 @@ import {
   findModelEscalateInMessages,
   invalidModelAckText,
 } from './model-escalate.js';
-import { resolveDefaultModel, isLightModel } from './model.js';
+import {
+  isLightModel,
+  resolveDefaultModel,
+  resolveInvestigationFallbackModel,
+  resolveInvestigationModel,
+  resolveVerifierModel,
+} from './model.js';
+import { buildBriefing } from './briefing.js';
+import { classifyIntent, RunTier } from './intent.js';
+import {
+  initKnowledgeStore,
+  parseReviewCommand,
+  resolveEntry,
+} from './knowledge.js';
 import { runLightCompletion } from './light-llm.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
@@ -146,6 +159,60 @@ async function handlePlantAlertMuteCommand(
   );
   return true;
 }
+/**
+ * Spark's knowledge review replies in the main chat: `still k-…`,
+ * `resolved k-…`, `confirm k-…`, `retract k-…`. Host-side, no agent run.
+ * Returns true if handled.
+ */
+async function handleKnowledgeReviewCommand(
+  chatJid: string,
+  group: RegisteredGroup,
+  messages: NewMessage[],
+  channel: Channel,
+): Promise<boolean> {
+  if (group.isMain !== true) return false;
+  const human = messages.filter((m) => !m.is_bot_message);
+  if (human.length === 0) return false;
+  const commands: NonNullable<ReturnType<typeof parseReviewCommand>>[] = [];
+  for (const m of human) {
+    for (const line of (m.content || '').split('\n')) {
+      if (!line.trim()) continue;
+      const cmd = parseReviewCommand(line);
+      if (!cmd) return false;
+      commands.push(cmd);
+    }
+  }
+  if (commands.length === 0) return false;
+  const replies: string[] = [];
+  for (const cmd of commands) {
+    const result = await resolveEntry(cmd.id, cmd.outcome, cmd.reason, {
+      folder: group.folder,
+      isMain: true,
+    });
+    replies.push(result.ok ? `✓ ${result.message}` : `✗ ${result.message}`);
+    logger.info({ chatJid, ...cmd, ok: result.ok }, 'Knowledge review command');
+  }
+  const last = messages[messages.length - 1];
+  const replyThreadId =
+    last.thread_id && last.thread_id !== '' ? last.thread_id : undefined;
+  try {
+    await channel.sendMessage(chatJid, replies.join('\n'), replyThreadId);
+  } catch (err) {
+    logger.warn({ err, chatJid }, 'Failed to send knowledge review ack');
+  }
+  lastAgentTimestamp[chatJid] = last.timestamp;
+  saveState();
+  return true;
+}
+
+/** Text of the latest few messages, for intent classification and briefing relevance. */
+function recentText(messages: NewMessage[]): string {
+  return messages
+    .slice(-3)
+    .map((m) => m.content || '')
+    .join('\n');
+}
+
 const onecli = new OneCLI({ url: ONECLI_URL });
 
 function ensureOneCLIAgent(jid: string, group: RegisteredGroup): void {
@@ -337,6 +404,12 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     return true;
   }
 
+  if (
+    await handleKnowledgeReviewCommand(chatJid, group, missedMessages, channel)
+  ) {
+    return true;
+  }
+
   // Model escalate: /opus, /haiku, /sonnet, or model:<id> on the latest message
   let model = resolveDefaultModel();
   let messagesForPrompt = missedMessages;
@@ -371,7 +444,16 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     logger.info({ chatJid, model }, 'Model escalate for agent run');
   }
 
-  const prompt = formatMessages(messagesForPrompt, TIMEZONE);
+  const intentText = recentText(messagesForPrompt);
+  const tier: RunTier = classifyIntent(intentText);
+  if (tier === 'investigation' && !escalate) {
+    model = resolveInvestigationModel();
+    logger.info({ chatJid, model }, 'Investigation tier for diagnostic chat');
+  }
+  const briefing = isLightModel(model)
+    ? ''
+    : buildBriefing(intentText, tier === 'investigation' ? 'full' : 'compact');
+  const prompt = briefing + formatMessages(messagesForPrompt, TIMEZONE);
   const replyThreadId = replyThreadIdFromBatch(missedMessages, {
     anchor: escalate?.message,
     triggerPattern: getTriggerPattern(group.trigger),
@@ -439,6 +521,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       }
     },
     model,
+    tier,
   );
 
   await channel.setTyping?.(chatJid, false);
@@ -474,6 +557,7 @@ async function runAgent(
   replyThreadId: string | undefined,
   onOutput?: (output: ContainerOutput) => Promise<void>,
   model?: string,
+  tier: RunTier = 'chat',
 ): Promise<'success' | 'error'> {
   const isMain = group.isMain === true;
   const sessionId = sessions[group.folder];
@@ -556,6 +640,13 @@ async function runAgent(
         assistantName: ASSISTANT_NAME,
         replyThreadId,
         model: resolvedModel,
+        tier,
+        ...(tier === 'investigation'
+          ? {
+              fallbackModel: resolveInvestigationFallbackModel(),
+              verifierModel: resolveVerifierModel(resolvedModel),
+            }
+          : {}),
       },
       (proc, containerName) =>
         queue.registerProcess(chatJid, proc, containerName, group.folder),
@@ -663,7 +754,24 @@ async function startMessageLoop(): Promise<void> {
             continue;
           }
 
-          const formatted = formatMessages(messagesToSend, TIMEZONE);
+          if (
+            await handleKnowledgeReviewCommand(
+              chatJid,
+              group,
+              messagesToSend,
+              channel,
+            )
+          ) {
+            continue;
+          }
+
+          // A running container keeps its model; a diagnostic follow-up
+          // still gets the full briefing.
+          const pipedText = recentText(messagesToSend);
+          const formatted =
+            (classifyIntent(pipedText) === 'investigation'
+              ? buildBriefing(pipedText, 'full')
+              : '') + formatMessages(messagesToSend, TIMEZONE);
 
           if (queue.sendMessage(chatJid, formatted)) {
             logger.debug(
@@ -724,6 +832,14 @@ async function main(): Promise<void> {
   initDatabase();
   logger.info('Database initialized');
   loadState();
+  try {
+    await initKnowledgeStore();
+  } catch (err) {
+    logger.error(
+      { err },
+      'Knowledge store init failed (continuing without it)',
+    );
+  }
 
   // Ensure OneCLI agents exist for all registered groups.
   // Recovers from missed creates (e.g. OneCLI was down at registration time).

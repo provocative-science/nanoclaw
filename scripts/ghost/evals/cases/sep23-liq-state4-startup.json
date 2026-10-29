@@ -1,0 +1,38 @@
+{
+  "id": "sep23-liq-state4-startup",
+  "kind": "chat",
+  "known_miss": true,
+  "allow_grafana": true,
+  "description": "Liquefaction system_state read 4 overnight. Ghost said 4 isn't a valid firmware state; STARTUP (4) had been added to the PLC firmware (branch cursor/liq-startup-state).",
+  "cutoff": "2026-09-23T16:30:10Z",
+  "messages": [
+    {
+      "sender": "Spark",
+      "time": "2026-09-23T16:30:10Z",
+      "text": "what happened with liquefaction overnight? I didn't see any alerts about it shutting down or erroring out"
+    }
+  ],
+  "ground_truth": "system_state 4 = STARTUP, a newly added firmware state (high-pressure-co2-plc, branch cursor/liq-startup-state). Not an invalid state.",
+  "expect": {
+    "must_mention": [
+      {
+        "name": "identifies state 4 as STARTUP",
+        "pattern": "startup"
+      }
+    ],
+    "must_not": [
+      {
+        "name": "does not call state 4 invalid",
+        "pattern": "(is ?n.t|not) a valid (firmware |system )?state|invalid (firmware |system )?state|unknown (firmware |system )?state"
+      }
+    ],
+    "must_call": [
+      {
+        "name": "looked at code or change history",
+        "pattern": "(Read|Grep|Glob|Bash|lookup_signal)"
+      }
+    ],
+    "contract": true,
+    "max_tool_calls": 40
+  }
+}

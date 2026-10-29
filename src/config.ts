@@ -47,6 +47,10 @@ export const AUTO_REGISTER_ALLOWLIST_PATH = path.join(
 export const STORE_DIR = path.resolve(PROJECT_ROOT, 'store');
 export const GROUPS_DIR = path.resolve(PROJECT_ROOT, 'groups');
 export const DATA_DIR = path.resolve(PROJECT_ROOT, 'data');
+/** Host-generated investigation reference (signal dictionary, change digest). */
+export const GHOST_DATA_DIR = path.resolve(DATA_DIR, 'ghost');
+/** Cross-agent knowledge store; its own git repo, written only by the host. */
+export const KNOWLEDGE_DIR = path.resolve(DATA_DIR, 'knowledge');
 
 export const CONTAINER_IMAGE =
   process.env.CONTAINER_IMAGE || 'nanoclaw-agent:latest';

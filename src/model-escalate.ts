@@ -2,7 +2,7 @@
  * Parse interactive model escalate directives from chat messages.
  *
  * Supported (after stripping @mentions):
- *   /opus …   /haiku …   /sonnet …   /qwen …
+ *   /opus …   /fable …   /haiku …   /sonnet …   /qwen …
  *   model:opus …   model:claude-sonnet-4-6 …   model:qwen …
  */
 
@@ -27,8 +27,10 @@ export function parseModelEscalate(text: string): ModelEscalateResult {
   const withoutMentions = text.replace(MENTION_RE, ' ');
   const trimmed = withoutMentions.replace(/^\s+/, '');
 
-  // /opus | /haiku | /sonnet | /qwen at start
-  const slashMatch = trimmed.match(/^\/(opus|haiku|sonnet|qwen)(?:\s+|$)/i);
+  // /opus | /fable | /haiku | /sonnet | /qwen at start
+  const slashMatch = trimmed.match(
+    /^\/(opus|fable|haiku|sonnet|qwen)(?:\s+|$)/i,
+  );
   if (slashMatch) {
     const alias = slashMatch[1].toLowerCase();
     const model = normalizeModel(alias)!;

@@ -1,0 +1,14 @@
+[Unit]
+Description=NanoClaw Ghost %i jobs (signal dictionary, change digest, knowledge upkeep)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/provocative/nanoclaw
+Environment=NANOCLAW_ROOT=%h/provocative/nanoclaw
+Environment=PATH=/usr/local/bin:/usr/bin:/bin:%h/.local/bin
+ExecStart=%h/provocative/nanoclaw/scripts/ghost/run_jobs.sh %i
+TimeoutStartSec=30min
+Nice=10
+NoNewPrivileges=true

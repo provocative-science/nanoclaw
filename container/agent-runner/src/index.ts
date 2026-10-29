@@ -26,6 +26,7 @@ import {
   stripInternalTags,
 } from './deliverable-result.js';
 import { queryThinkingOptions } from './thinking.js';
+import { EvidenceLog, runVerifier, saveEvalRecord, saveVerifierReport } from './verifier.js';
 
 interface ContainerInput {
   prompt: string;
@@ -39,6 +40,12 @@ interface ContainerInput {
   replyThreadId?: string;
   /** Concrete Anthropic model ID from host (already allowlisted). */
   model?: string;
+  tier?: 'investigation' | 'chat';
+  fallbackModel?: string;
+  verifierModel?: string;
+  telemetryTimeCutoff?: string;
+  evalMode?: boolean;
+  evalAllowGrafana?: boolean;
 }
 
 interface ContainerOutput {
@@ -281,9 +288,14 @@ function shouldClose(): boolean {
   return false;
 }
 
-/** Host git_pull writes these beside chat messages; the agent reads them itself. */
+/** Host git_pull / kb_write results land beside chat messages; tools read them themselves. */
 function isGitPullResultFile(filename: string, data: { type?: unknown } | null): boolean {
-  return filename.startsWith('git_pull_result_') || data?.type === 'git_pull_result';
+  return (
+    filename.startsWith('git_pull_result_') ||
+    filename.startsWith('kb_result_') ||
+    data?.type === 'git_pull_result' ||
+    data?.type === 'kb_result'
+  );
 }
 
 /**
@@ -300,7 +312,7 @@ function drainIpcInput(): string[] {
 
     const messages: string[] = [];
     for (const file of files) {
-      if (file.startsWith('git_pull_result_')) continue;
+      if (file.startsWith('git_pull_result_') || file.startsWith('kb_result_')) continue;
 
       const filePath = path.join(IPC_INPUT_DIR, file);
       try {
@@ -432,6 +444,7 @@ async function runQuery(
 ): Promise<{ newSessionId?: string; lastAssistantUuid?: string; closedDuringQuery: boolean }> {
   const stream = new MessageStream();
   stream.push(prompt);
+  let lastUserText = prompt;
 
   // Poll IPC for follow-up messages and _close sentinel during the query
   let ipcPolling = true;
@@ -449,6 +462,7 @@ async function runQuery(
     for (const text of messages) {
       log(`Piping IPC message into active query (${text.length} chars)`);
       stream.push(text);
+      lastUserText = text;
     }
     setTimeout(pollIpcDuringQuery, IPC_POLL_MS);
   };
@@ -486,6 +500,47 @@ async function runQuery(
   }
 
   const groupMcpServers = loadGroupMcpServersFromDisk();
+  if (containerInput.telemetryTimeCutoff && groupMcpServers.telemetry) {
+    groupMcpServers.telemetry = {
+      ...groupMcpServers.telemetry,
+      env: { ...(groupMcpServers.telemetry.env || {}), TELEMETRY_TIME_CUTOFF: containerInput.telemetryTimeCutoff },
+    };
+  }
+  const dropGrafana = containerInput.evalMode && !containerInput.evalAllowGrafana;
+  if (dropGrafana) {
+    delete groupMcpServers.grafana;
+  }
+
+  const evidence = new EvidenceLog();
+  const verifyEnabled =
+    containerInput.tier === 'investigation' &&
+    !!containerInput.verifierModel &&
+    process.env.GHOST_VERIFIER !== 'off';
+  const finalize = async (draft: string | null): Promise<string | null> => {
+    const visible = draft ? stripInternalTags(draft) : '';
+    let final = draft;
+    let outcome: Awaited<ReturnType<typeof runVerifier>> | null = null;
+    if (visible && verifyEnabled && evidence.usedPlantTools()) {
+      log(`Verifier: checking ${visible.length} chars against ${evidence.items.length} tool calls (${containerInput.verifierModel})`);
+      outcome = await runVerifier({
+        draft: visible,
+        request: lastUserText,
+        evidence,
+        model: containerInput.verifierModel!,
+        sdkEnv,
+        telemetryServer: groupMcpServers.telemetry,
+        log,
+      });
+      log(`Verifier: ${outcome.verdict} in ${outcome.durationMs}ms; issues: ${outcome.issues.join(' | ') || 'none'}`);
+      saveVerifierReport(visible, outcome, evidence.items.length);
+      final = outcome.text;
+    }
+    if (containerInput.evalMode && visible) {
+      saveEvalRecord({ model: containerInput.model, draft: visible, final: final ?? '', verifier: outcome, tools: evidence.items });
+    }
+    if (visible) evidence.reset();
+    return final;
+  };
 
   for await (const message of query({
     prompt: stream,
@@ -495,6 +550,9 @@ async function runQuery(
       resume: sessionId,
       resumeSessionAt: resumeAt,
       ...(containerInput.model ? { model: containerInput.model } : {}),
+      ...(containerInput.fallbackModel && containerInput.fallbackModel !== containerInput.model
+        ? { fallbackModel: containerInput.fallbackModel }
+        : {}),
       ...queryThinkingOptions(containerInput.model),
       systemPrompt: globalClaudeMd
         ? { type: 'preset' as const, preset: 'claude_code' as const, append: globalClaudeMd }
@@ -509,7 +567,7 @@ async function runQuery(
         'NotebookEdit',
         'mcp__nanoclaw__*',
         'mcp__notion__*',
-        'mcp__grafana__*',
+        ...(dropGrafana ? [] : ['mcp__grafana__*']),
         'mcp__telemetry__*'
       ],
       env: sdkEnv,
@@ -525,6 +583,7 @@ async function runQuery(
             NANOCLAW_CHAT_JID: containerInput.chatJid,
             NANOCLAW_GROUP_FOLDER: containerInput.groupFolder,
             NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
+            ...(containerInput.evalMode ? { NANOCLAW_EVAL_MODE: '1' } : {}),
             ...(containerInput.replyThreadId
               ? {
                   NANOCLAW_REPLY_THREAD_ID: containerInput.replyThreadId,
@@ -541,6 +600,18 @@ async function runQuery(
     messageCount++;
     const msgType = message.type === 'system' ? `system/${(message as { subtype?: string }).subtype}` : message.type;
     log(`[msg #${messageCount}] type=${msgType}`);
+
+    if (message.type === 'assistant' || message.type === 'user') {
+      const content = (message as { message?: { content?: unknown } }).message?.content;
+      if (Array.isArray(content)) {
+        for (const block of content as Array<Record<string, unknown>>) {
+          if (block?.type === 'tool_use') evidence.onToolUse(String(block.id), String(block.name), block.input);
+          else if (block?.type === 'tool_result') evidence.onToolResult(String(block.tool_use_id), block.content);
+        }
+      } else if (message.type === 'user' && typeof content === 'string') {
+        lastUserText = content;
+      }
+    }
 
     if (message.type === 'assistant') {
       if ('uuid' in message) {
@@ -584,7 +655,7 @@ async function runQuery(
       }
       writeOutput({
         status: 'success',
-        result: deliverable,
+        result: await finalize(deliverable),
         newSessionId
       });
     }
@@ -602,7 +673,7 @@ async function runQuery(
     );
     writeOutput({
       status: 'success',
-      result: lastDeliverableAssistantText,
+      result: await finalize(lastDeliverableAssistantText),
       newSessionId,
     });
   }

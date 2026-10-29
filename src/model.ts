@@ -4,20 +4,31 @@
  */
 
 export const MODEL_ALIASES: Record<string, string> = {
-  sonnet: 'claude-sonnet-4-6',
-  opus: 'claude-opus-4-6',
+  sonnet: 'claude-sonnet-5',
+  opus: 'claude-opus-5',
+  fable: 'claude-fable-5-1',
   haiku: 'claude-haiku-4-5',
   qwen: 'qwen3.6-35b',
 };
 
-/** Full IDs that may be passed explicitly (same set as alias targets). */
-export const MODEL_FULL_IDS = new Set(Object.values(MODEL_ALIASES));
+/** Older Claude IDs that stay selectable by full ID (model:claude-opus-4-6). */
+const LEGACY_FULL_IDS = ['claude-sonnet-4-6', 'claude-opus-4-6'];
+
+/** Full IDs that may be passed explicitly (alias targets + legacy IDs). */
+export const MODEL_FULL_IDS = new Set([
+  ...Object.values(MODEL_ALIASES),
+  ...LEGACY_FULL_IDS,
+]);
 
 /** Models that run on the host OpenAI-compatible light path (no tools/MCP). */
 export const LIGHT_MODEL_IDS = new Set<string>([MODEL_ALIASES.qwen]);
 
+/** Alias for the investigation tier (alerts, diagnostic questions). */
+export const INVESTIGATION_ALIAS = 'investigation';
+
 const BUILTIN_ALLOWLIST = new Set([
   ...Object.keys(MODEL_ALIASES),
+  INVESTIGATION_ALIAS,
   ...MODEL_FULL_IDS,
 ]);
 
@@ -54,6 +65,9 @@ export function normalizeModel(raw: string | null | undefined): string | null {
   const lower = trimmed.toLowerCase();
   const allow = getModelAllowlist();
 
+  if (lower === INVESTIGATION_ALIAS) {
+    return resolveInvestigationModel();
+  }
   if (MODEL_ALIASES[lower]) {
     return MODEL_ALIASES[lower];
   }
@@ -74,7 +88,7 @@ export function normalizeModel(raw: string | null | undefined): string | null {
 
 /** Alias or full ID list for user-facing error messages. */
 export function modelAllowlistHint(): string {
-  return 'sonnet | opus | haiku | qwen (or full IDs: claude-sonnet-4-6, claude-opus-4-6, claude-haiku-4-5, qwen3.6-35b)';
+  return 'sonnet | opus | fable | haiku | qwen | investigation (or full IDs: claude-sonnet-5, claude-opus-5, claude-fable-5-1, claude-haiku-4-5, claude-sonnet-4-6, claude-opus-4-6, qwen3.6-35b)';
 }
 
 /**
@@ -86,6 +100,35 @@ export function resolveDefaultModel(): string {
   const fromEnv = normalizeModel(process.env.NANOCLAW_DEFAULT_MODEL);
   if (fromEnv && !isLightModel(fromEnv)) return fromEnv;
   return MODEL_ALIASES.sonnet;
+}
+
+function claudeFromEnv(name: string, fallback: string): string {
+  const raw = process.env[name]?.trim().toLowerCase();
+  if (!raw || raw === INVESTIGATION_ALIAS) return fallback;
+  const model = MODEL_ALIASES[raw] ?? normalizeModel(raw);
+  return model && !isLightModel(model) ? model : fallback;
+}
+
+/** Strongest model, used for plant alerts and diagnostic questions. */
+export function resolveInvestigationModel(): string {
+  return claudeFromEnv('NANOCLAW_INVESTIGATION_MODEL', MODEL_ALIASES.fable);
+}
+
+/** Tried by the SDK when the investigation model is unavailable/overloaded. */
+export function resolveInvestigationFallbackModel(): string {
+  return claudeFromEnv(
+    'NANOCLAW_INVESTIGATION_FALLBACK_MODEL',
+    MODEL_ALIASES.opus,
+  );
+}
+
+/** Skeptic pass; deliberately a different model from the investigator. */
+export function resolveVerifierModel(investigationModel: string): string {
+  const preferred = claudeFromEnv('GHOST_VERIFIER_MODEL', MODEL_ALIASES.opus);
+  if (preferred !== investigationModel) return preferred;
+  return investigationModel === MODEL_ALIASES.opus
+    ? MODEL_ALIASES.sonnet
+    : MODEL_ALIASES.opus;
 }
 
 /** Concrete default at module load (re-read via resolveDefaultModel in hot paths if needed). */
