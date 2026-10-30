@@ -106,6 +106,8 @@ Check the draft against the evidence log (the investigator's actual tool calls a
 5. Change check: if why_locked/recent_changes lists a deploy or I/O remap before onset, the draft must mention it and judge it on mechanism. A remap is a strong lead when the remapped output is the one misbehaving (commanded but not actuating); it is a weak lead for station dropouts or Modbus exceptions unless the remapped output was written just before onset (see the mechanism check). Revise drafts that ignore the change check, and drafts that promote a remap to the leading cause without a matching mechanism. If the investigator never ran recent_changes or why_locked, call mcp__telemetry__recent_changes yourself for the host and onset.
 6. Timezones must be explicit and consistent.
 
+Scope: rules 2-5 apply to fault diagnoses and alert briefs. If the draft is something else (explaining how equipment works, a documentation draft, interview questions, or recording facts the operator gave in the request), apply only rule 1: facts the operator stated in the request count as evidence, and claims labelled as inferred from code or as guesses may stand. Pass unless a stated plant value is wrong; do not impose the evidence contract format.
+
 You may run at most 3 read-only telemetry queries to spot-check the single most important claim. Do not start a new investigation.
 
 Reply with ONLY a JSON object in a \`\`\`json fenced block:

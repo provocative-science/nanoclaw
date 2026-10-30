@@ -10,6 +10,7 @@ from engine.rs + rules/**.
 Outputs (read-only to agents at /workspace/ghost):
   data/ghost/signals.json
   data/ghost/systems/{airbed,container,liquefaction,supervisor}.md
+  data/ghost/systems/{system}-process.md  (hand-written process docs, newest copy on any branch)
 
 Run: uv run --with duckdb --with boto3 python scripts/ghost/build_dictionary.py
 """
@@ -34,6 +35,9 @@ RS = "co3ntrol-rs"
 GUI = "co3ntrol-gui"
 SCHEMA_HOSTS = {"airbed-host": "airbed", "bop-host": "bop"}
 SYSTEM_DOCS = {"airbed": "airbed", "bop": "container", "dacs": "container", "liquefaction": "liquefaction"}
+# Hand-written "how it works" docs in co3ntrol-rs. Docs follow the newest commit on any recent branch
+# (they usually land on a feature branch before main), not the deployed ref.
+PROCESS_DOCS = {"airbed": "documents/airbed-system.md"}
 REF_WINDOW_DAYS = 45
 MAX_REFS = 15
 
@@ -245,6 +249,20 @@ def _infer_system(rule: dict[str, Any]) -> str:
     if systems == {"liquefaction"}:
         return "liquefaction"
     return "container"
+
+
+def newest_doc(repo: Path, refs: list[str], path: str) -> dict[str, Any] | None:
+    best: dict[str, Any] | None = None
+    for ref in dict.fromkeys(refs):
+        line = common.git(repo, "log", "-1", "--format=%h%x09%cI%x09%an%x09%s", ref, "--", path, check=False).strip()
+        if not line:
+            continue
+        sha, committed, author, subject = line.split("\t", 3)
+        if best is None or committed > best["committed"]:
+            best = {"path": path, "ref": ref, "sha": sha, "committed": committed, "author": author, "subject": subject}
+    if best:
+        best["text"] = common.git_show(repo, best["ref"], path) or ""
+    return best
 
 
 # ---------------------------------------------------------------------------
@@ -474,6 +492,12 @@ def build(fetch: bool) -> dict[str, Any]:
         if not rule["applies_to"]:
             rule["note"] = "reference only: this ref does not match any host's deployed telemetry"
 
+    process_docs = {
+        system: doc
+        for system, path in PROCESS_DOCS.items()
+        if (doc := newest_doc(rs, [r["ref"] for r in refs] + ["origin/main"], path))
+    }
+
     # Automation jobs: parameters + state machines.
     jobs: list[dict[str, Any]] = []
     by_field = defaultdict(list)
@@ -519,6 +543,7 @@ def build(fetch: bool) -> dict[str, Any]:
         "rules": rules,
         "jobs": jobs,
         "stations": {"airbed": stations},
+        "process_docs": process_docs,
     }
 
 
@@ -551,6 +576,14 @@ def render_system_doc(dictionary: dict[str, Any], doc_name: str) -> str:
     for host, h in dictionary["hosts"].items():
         if h["system"] in systems:
             lines.append(f"- {host}: {h['field_count']} telemetry fields in `{h['bucket']}` ({h['layout']} layout), newest partition {h['latest_day']}.")
+    if doc_name in PROCESS_DOCS:
+        pd = (dictionary.get("process_docs") or {}).get(doc_name)
+        lines.append(
+            f"- **How the system works** (phases, normal behaviour, procedures, failure modes): `{doc_name}-process.md`, "
+            f"from co3ntrol-rs `{pd['path']}` @ `{pd['ref']}` {pd['sha']} ({pd['committed'][:10]}, {pd['author']})."
+            if pd
+            else f"- No process description yet (co3ntrol-rs `{PROCESS_DOCS[doc_name]}` not found on any recent branch)."
+        )
     if doc_name == "liquefaction":
         lines.append("- Liquefaction is not in S3 parquet; query live values in Grafana/Mimir with the `prom` names below.")
     lines.append("")
@@ -658,7 +691,17 @@ def main() -> int:
     args = ap.parse_args()
     dictionary = build(fetch=not args.no_fetch)
     out = common.GHOST_DIR
+    process_texts = {k: v.pop("text") for k, v in dictionary["process_docs"].items()}
     common.write_json_atomic(out / "signals.json", dictionary)
+    for system, text in process_texts.items():
+        pd = dictionary["process_docs"][system]
+        header = (
+            f"<!-- from co3ntrol-rs {pd['path']} @ {pd['ref']} {pd['sha']} ({pd['committed']}, {pd['author']}); "
+            "regenerated daily, edit it in co3ntrol-rs -->\n\n"
+        )
+        common.write_text_atomic(out / "systems" / f"{system}-process.md", header + text)
+    for system in PROCESS_DOCS.keys() - process_texts.keys():
+        (out / "systems" / f"{system}-process.md").unlink(missing_ok=True)
     for doc in sorted(set(SYSTEM_DOCS.values())):
         common.write_text_atomic(out / "systems" / f"{doc}.md", render_system_doc(dictionary, doc))
     common.write_text_atomic(out / "systems" / "supervisor.md", render_supervisor_doc(dictionary))

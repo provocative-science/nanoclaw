@@ -187,6 +187,35 @@ AIRBED_IO = """
 """
 
 
+class ProcessDocTests(unittest.TestCase):
+    def test_newest_copy_across_branches(self):
+        import build_dictionary as bd
+
+        repo = Path(tempfile.mkdtemp(prefix="ghost-doc-"))
+
+        def git(*args, date="2026-10-01T00:00:00Z"):
+            env = {**os.environ, "GIT_AUTHOR_DATE": date, "GIT_COMMITTER_DATE": date}
+            subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", *args],
+                           check=True, capture_output=True, env=env)
+
+        git("init", "-q", "-b", "main")
+        (repo / "documents").mkdir()
+        (repo / "documents" / "airbed-system.md").write_text("old\n")
+        git("add", ".")
+        git("commit", "-qm", "old doc", date="2026-10-01T00:00:00Z")
+        git("checkout", "-qb", "docs")
+        (repo / "documents" / "airbed-system.md").write_text("new\n")
+        git("commit", "-qam", "new doc", date="2026-10-20T00:00:00Z")
+        git("checkout", "-qb", "feature", "main")
+        (repo / "x.rs").write_text("fn main() {}\n")
+        git("add", ".")
+        git("commit", "-qm", "code only", date="2026-10-25T00:00:00Z")
+
+        doc = bd.newest_doc(repo, ["feature", "main", "docs"], "documents/airbed-system.md")
+        self.assertEqual((doc["ref"], doc["text"]), ("docs", "new\n"), "newest doc commit wins, not newest branch")
+        self.assertIsNone(bd.newest_doc(repo, ["main"], "documents/missing.md"))
+
+
 class IoChangeTests(unittest.TestCase):
     def setUp(self):
         import io_changes
