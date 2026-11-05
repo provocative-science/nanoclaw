@@ -263,7 +263,7 @@ class AlertMonitor:
         loki_poll_interval_s: float = 15.0,
         prom_client: PromClient | None = None,
         liq_prom_poll_s: float = 15.0,
-        liq_stale_s: float = 180.0,
+        liq_stale_s: float = 240.0,
         incident_quiet_s: float = 900.0,
         incident_update_min_s: float | None = None,
         persist_incidents: bool = True,
@@ -995,7 +995,7 @@ def main() -> int:
             else None
         ),
         liq_prom_poll_s=env_float("LIQ_PROM_POLL_S", 15.0),
-        liq_stale_s=env_float("LIQ_STALE_S", 180.0),
+        liq_stale_s=env_float("LIQ_STALE_S", 240.0),
         incident_quiet_s=env_float("INCIDENT_QUIET_S", 900.0),
         incident_update_min_s=(
             env_float("INCIDENT_UPDATE_MIN_S", 0.0) if os.environ.get("INCIDENT_UPDATE_MIN_S") else None
