@@ -67,3 +67,27 @@ def schedule_once(
         "payload": payload,
         "task_id": tid,
     }
+
+
+def send_message(
+    *,
+    nanoclaw_root: Path,
+    ipc_group_folder: str,
+    target_jid: str,
+    text: str,
+    thread_id: str | None = None,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Post a plain line to the chat via data/ipc/{folder}/messages/ (no agent run)."""
+    payload: dict[str, Any] = {"type": "message", "chatJid": target_jid, "text": text}
+    if thread_id:
+        payload["threadId"] = thread_id
+    messages_dir = nanoclaw_root / "data" / "ipc" / ipc_group_folder / "messages"
+    path = messages_dir / f"{time.time_ns()}-plant-alert-line.json"
+    if dry_run:
+        return {"dry_run": True, "path": str(path), "payload": payload}
+    messages_dir.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+    tmp.replace(path)
+    return {"dry_run": False, "path": str(path), "payload": payload}

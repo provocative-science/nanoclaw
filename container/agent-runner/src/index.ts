@@ -288,13 +288,15 @@ function shouldClose(): boolean {
   return false;
 }
 
-/** Host git_pull / kb_write results land beside chat messages; tools read them themselves. */
+/** Host git_pull / kb_write / plant_mode results land beside chat messages; tools read them themselves. */
 function isGitPullResultFile(filename: string, data: { type?: unknown } | null): boolean {
   return (
     filename.startsWith('git_pull_result_') ||
     filename.startsWith('kb_result_') ||
+    filename.startsWith('plant_mode_result_') ||
     data?.type === 'git_pull_result' ||
-    data?.type === 'kb_result'
+    data?.type === 'kb_result' ||
+    data?.type === 'plant_mode_result'
   );
 }
 

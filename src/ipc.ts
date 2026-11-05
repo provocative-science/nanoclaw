@@ -12,6 +12,7 @@ import { isValidGroupFolder } from './group-folder.js';
 import { handleKbWrite } from './knowledge.js';
 import { logger } from './logger.js';
 import { modelAllowlistHint, normalizeModel } from './model.js';
+import { handlePlantModeIpc } from './plant-modes.js';
 import { stripInternalTags } from './router.js';
 import { RegisteredGroup } from './types.js';
 import { resolveContainerWorkspacePathToHost } from './workspace-path.js';
@@ -786,6 +787,25 @@ export async function processTaskIpc(
       }
       await handleKbWrite(data as Record<string, unknown>, sourceGroup, isMain);
       break;
+
+    case 'plant_mode': {
+      const entry = Object.entries(registeredGroups).find(
+        ([, g]) => g.folder === sourceGroup,
+      );
+      if (!entry) {
+        logger.warn(
+          { sourceGroup },
+          'plant_mode from unregistered group ignored',
+        );
+        break;
+      }
+      handlePlantModeIpc(
+        data as Record<string, unknown>,
+        sourceGroup,
+        entry[0],
+      );
+      break;
+    }
 
     default:
       logger.warn({ type: data.type }, 'Unknown IPC task type');

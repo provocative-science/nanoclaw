@@ -162,7 +162,10 @@ Ghost narrative). Mute Ghost with `mute alerts` does **not** mute OnCall.
 
 **Ghost mute:** Tag Ghost with `mute alerts` / `unmute alerts` in Telegram.
 NanoClaw writes `data/alert-monitor/mute.json`; the host monitor skips IPC
-while muted. Grafana OnCall is **not** muted by this command.
+while muted. Per-subsystem modes (`@Ghost mute container alerts for 12h`,
+`@Ghost container offline`, or Ghost's `set_plant_mode` tool) go to
+`data/alert-monitor/plant-modes.json`, which the monitor checks before every
+agent run. Grafana OnCall is **not** muted by either.
 
 Do not make the Python monitor the primary OnCall webhook unless Explore shows
 these gauges missing on Mimir.

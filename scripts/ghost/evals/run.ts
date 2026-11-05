@@ -257,6 +257,7 @@ function buildPrompt(c: EvalCase, ctx?: ReplayContext): string {
   const briefing = buildBriefing(intentText, 'full', {
     now: cutoff,
     includeDigest: !!ctx,
+    includeModes: false,
     ghostDataDir: ctx?.ghostDir,
     excludeEntryIds: c.exclude_kb,
     excludeAlertIds: c.alert_id ? [c.alert_id] : [],

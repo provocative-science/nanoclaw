@@ -108,8 +108,10 @@ Claims without evidence from this run get cut, so cite what you queried.
      signals=[affected fields])` — deploys, device I/O remaps (pin changes)
      and controller restarts before onset, ranked by overlap with the
      affected signals / backplane risers.
-   - `mcp__telemetry__lookup_signal("<words>")` to map names to columns, Prom
-     names, units, GUI labels and the supervisor rules that read them.
+   - `mcp__telemetry__lookup_signal("<words>", system="<subsystem>")` to map
+     names to columns, Prom names, units, GUI labels and the supervisor rules
+     that read them. Always pass `system`: rules with the same name exist on
+     airbed and the container and behave differently.
    - `mcp__telemetry__find_transitions(host, [signals], start, end)` for the
      timeline; `mcp__telemetry__plant_snapshot(host, at)` for GUI-style state.
    Archive upload lags live by up to ~an hour; if the newest S3 sample is
@@ -151,6 +153,12 @@ Claims without evidence from this run get cut, so cite what you queried.
    cause; telemetry interlocks often only say `supervisor` /
    "can't accept unforced commands while locked" and do not name the
    watchdog. Do not describe it as an automation job abort.
+3d. **stopped_reporting** (liquefaction): Mimir has had no new
+   `subsystem="liquefaction"` samples for `age_s`, so the monitor is blind to
+   that system until they return. Candidates: controller or host power/crash,
+   network, Alloy. Quote the last known state from the payload (`last_state`,
+   tower lights, pressures), check Loki for pirate-host, and check the
+   briefing and recent operator chat for planned work or power cuts.
 4. Change check (always): what was deployed before onset —
    `recent_changes` / why_locked `change_check` (device I/O remaps, commits,
    controller restarts). Judge each change on mechanism: a pin remap makes
@@ -179,6 +187,19 @@ during the warm/hot bucket-shuffle handoff). Prefer the monitor payload
 
 Do not invent sensor values. If Grafana is empty, say so and lean on the
 monitor snapshot.
+
+## Urgency (calibrate before writing)
+First establish whether the subsystem was operating at onset, from measured
+values (flows, pressures, temperatures, active phase, system_state), not
+setpoints or commanded values: a 120 °C setpoint says nothing about whether
+the loop is hot. Check the briefing's *Operational modes* and plant status.
+- *immediate action required*: an operating system that is locked, losing
+  pressure/containment, or has a safety function blocked.
+- *watch*: comms loss, power loss, stale-input watchdogs or telemetry gaps
+  on an idle system; faults that need a look before the next start.
+- *informational*: expected transients, or the system is declared offline /
+  in maintenance.
+Say in the brief which it was ("idle since …" / "running, phase …").
 
 ## Message template (follow this structure)
 Omit sections that are not relevant. Use Eastern Time (US/Eastern) for the alert time — convert
@@ -216,7 +237,31 @@ below; otherwise "Not confirmed — leading hypothesis: …">
 """
 
 
-def build_prompt(alert: dict[str, Any], *, alert_id: str | None = None) -> str:
+UPDATE_PREFIX = """\
+## This is an update to an open incident
+The monitor already paged this chat for this incident (payload `incident`:
+opened_at, events, briefs, signatures) and your earlier brief is in this
+chat's history and `/workspace/shared/plant-alerts/latest.md`. Only
+`incident.new_signatures` are new. Investigate just those, decide whether
+they change the earlier assessment, and do not repeat the earlier brief.
+
+"""
+
+UPDATE_MESSAGE_TEMPLATE = """## Message template (update — 8 lines max)
+Use Eastern Time (US/Eastern).
+
+*Update:* <subsystem> incident from <HH:MM ET> (<events> alert events so far)
+*New:* <the new signature(s) in plain words, with ET time>
+*Assessment:* <1–3 sentences: same cause as before / new problem / changes urgency, with the evidence>
+*Urgency:* <immediate action required | watch | informational>
+"""
+
+
+def build_prompt(alert: dict[str, Any], *, alert_id: str | None = None, update: bool = False) -> str:
     alert_json = json.dumps(alert, indent=2, default=str)
     aid = alert_id or alert.get("alert_id") or "plant-alert-unknown"
-    return PROMPT_TEMPLATE.format(alert_json=alert_json, alert_id=aid)
+    text = PROMPT_TEMPLATE.format(alert_json=alert_json, alert_id=aid)
+    if not update:
+        return text
+    head, _, _ = text.partition("## Message template (follow this structure)")
+    return UPDATE_PREFIX + head + UPDATE_MESSAGE_TEMPLATE

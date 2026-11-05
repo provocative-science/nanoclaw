@@ -122,6 +122,8 @@ When the user asks about a plant warning, tower light, lock, interlock, or “th
 
 Do **not** assume the current chat’s Claude session transcript contains the alert — only Carbon Capture’s session does. Prefer the shared archive.
 
+How the monitor pages: events are grouped into one **incident per subsystem**. The first event gets a full brief; repeats of the same signature are only counted; a new signature gets a short update (at most one per 5 min); after 15 min without events the monitor posts one closing line. Liquefaction is read from Prom (Mimir), and the monitor raises `stopped_reporting` when liquefaction samples stop arriving. **Operator plant modes** (offline / maintenance / muted, plus muted liquefaction HAZOP bits) are set with `mcp__nanoclaw__set_plant_mode` or by operators typing `@Ghost container offline` / `@Ghost mute liquefaction alerts for 3h`. While a mode is active the monitor logs that subsystem's events and runs no investigation. Active modes appear in the briefing under *Operational modes*.
+
 ### Notion MCP
 
 When configured, you have **`mcp__notion__*`** tools (Notion stdio MCP). Use them for databases and pages listed in the knowledge store (`kb_search` "notion") — e.g. Container System Rider Log and BOP/DAC telemetry archives.

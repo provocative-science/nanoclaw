@@ -3,9 +3,13 @@
 Plant alert monitor for NanoClaw (runs on bob49 — not the Pi LED client).
 
 Polls liquefaction tower indicators / HAZOP bitmasks / system_state ERROR
-transitions, container supervisor lock + triggered_interlocks, and (option B)
-Loki abort lines from Python automation-console.log. On rising edges, injects
-a one-shot schedule_task IPC so Ghost messages the plant chat with context.
+transitions (from Grafana Cloud Prometheus by default; the controller API when
+LIQ_SOURCE=api), container supervisor lock + triggered_interlocks, and (option B)
+Loki abort / watchdog lines. Rising edges are grouped into per-subsystem
+incidents (incidents.py): the first edge gets a full Ghost brief via a one-shot
+schedule_task IPC, new signatures get a short update, repeats are counted, and a
+quiet incident closes with one plain line. Operator plant modes (plant_modes.py:
+offline / maintenance / muted, muted liquefaction bits) suppress agent runs.
 Loki polling is independent of Grafana Alerting / OnCall.
 
 Usage:
@@ -19,7 +23,9 @@ Env (see alert-monitor.env.example):
     LIQ_BASE_URL, BOP_BASE_URL, AUTH_TOKEN / LIQ_AUTH_TOKEN / BOP_AUTH_TOKEN,
     TARGET_JID, IPC_GROUP_FOLDER, NANOCLAW_ROOT, COOLDOWN_S, POLL_INTERVAL_S,
     GRAFANA_URL + GRAFANA_SERVICE_ACCOUNT_TOKEN (or LOKI_URL/USER/TOKEN) for
-    Ghost option B Loki abort polling, LOKI_POLL_INTERVAL_S
+    Ghost option B Loki abort polling, LOKI_POLL_INTERVAL_S,
+    LIQ_SOURCE (prom|api), LIQ_PROM_POLL_S, LIQ_STALE_S,
+    INCIDENT_QUIET_S, INCIDENT_UPDATE_MIN_S (defaults to COOLDOWN_S)
 """
 
 from __future__ import annotations
@@ -32,15 +38,19 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import requests
 
+import plant_modes
 from conditions import decode_bits, decode_conditions
+from incidents import Incident, IncidentBook
 from loki_abort import LokiAbortClient, line_is_watchdog, new_hits_after, watchdog_name
 from container_phase import phase_summary, snapshot_filter_controls
 from mute_state import is_muted
-from nanoclaw_ipc import schedule_once
+from nanoclaw_ipc import schedule_once, send_message
 from plant_alerts_log import record_alert_event
+from prom_source import PromClient
 from prompt import build_prompt
 from recent_deploy import (
     DEFAULT_RECENT_DEPLOY_WINDOW_S,
@@ -103,7 +113,21 @@ def auth_headers(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"} if token else {}
 
 
+ET = ZoneInfo("America/New_York")
+HTTP_BACKOFF_S = 60.0
+# url -> (down since, retry after); one log line per outage instead of one per poll
+_unreachable: dict[str, tuple[float, float]] = {}
+
+
+def et_hhmm(ts: float) -> str:
+    return datetime.fromtimestamp(ts, ET).strftime("%H:%M ET")
+
+
 def fetch_latest(url: str, label: str, token: str) -> dict[str, Any] | None:
+    now = time.time()
+    down = _unreachable.get(url)
+    if down and now < down[1]:
+        return None
     try:
         resp = requests.get(url, headers=auth_headers(token), timeout=5)
         if resp.status_code == 400 and not token:
@@ -116,12 +140,18 @@ def fetch_latest(url: str, label: str, token: str) -> dict[str, Any] | None:
         resp.raise_for_status()
         data = resp.json()
         samples = data.get("data", [])
+        if down:
+            print(f"[INFO] {label} reachable again after {int(now - down[0])}s", flush=True)
+            _unreachable.pop(url, None)
         if not samples:
             print(f"[WARN] no {label} samples in response", flush=True)
             return None
         return samples[-1]
-    except requests.exceptions.ConnectionError:
-        print(f"[ERROR] cannot reach server for {label}", flush=True)
+    except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
+        if not down:
+            print(f"[ERROR] cannot reach {label} at {url}; retrying every "
+                  f"{int(HTTP_BACKOFF_S)}s (logged once per outage)", flush=True)
+        _unreachable[url] = (down[0] if down else now, now + HTTP_BACKOFF_S)
     except Exception as e:
         print(f"[ERROR] {label}: {e}", flush=True)
     return None
@@ -203,6 +233,14 @@ class MonitorState:
     # After first sample, edges are meaningful
     liq_primed: bool = False
     bop_primed: bool = False
+    # Prom-sourced liquefaction freshness
+    liq_next_prom_poll_at: float = 0.0
+    liq_last_sample_ts: float | None = None
+    liq_last_systick: int | None = None
+    liq_seen_fresh: bool = False
+    liq_stale: bool = False
+    liq_stale_alerted: bool = False
+    liq_prom_error: bool = False
 
 
 class AlertMonitor:
@@ -223,6 +261,12 @@ class AlertMonitor:
         target_thread_id: str | None = None,
         loki_client: LokiAbortClient | None = None,
         loki_poll_interval_s: float = 15.0,
+        prom_client: PromClient | None = None,
+        liq_prom_poll_s: float = 15.0,
+        liq_stale_s: float = 180.0,
+        incident_quiet_s: float = 900.0,
+        incident_update_min_s: float | None = None,
+        persist_incidents: bool = True,
     ) -> None:
         self.liq_telemetry = f"{liq_base.rstrip('/')}/api/v1/system/liquefaction/telemetry"
         self.liq_app_telemetry = f"{liq_base.rstrip('/')}/api/v1/telemetry"
@@ -240,18 +284,32 @@ class AlertMonitor:
         self.loki_poll_interval_s = loki_poll_interval_s
         self.state = MonitorState()
         self.cooldown = CooldownBook(cooldown_s)
+        self.prom = prom_client if (prom_client and prom_client.enabled) else None
+        self.liq_prom_poll_s = liq_prom_poll_s
+        self.liq_stale_s = liq_stale_s
+        self.incidents = IncidentBook(
+            nanoclaw_root,
+            quiet_s=incident_quiet_s,
+            update_min_s=cooldown_s if incident_update_min_s is None else incident_update_min_s,
+            persist=persist_incidents and not dry_run,
+        )
+        # Latest alert per subsystem, for updates released after the rate limit
+        self._latest_alert: dict[str, dict[str, Any]] = {}
 
     def snapshot_recent_deploy(self) -> dict[str, Any]:
         """Probe both plant hosts' systick; rare (only on alert fire)."""
         threshold = self.recent_deploy_window_s
         checks = []
-        liq_sample = fetch_latest(
-            self.liq_app_telemetry, "liquefaction-app", self.liq_token
-        )
+        if self.prom:
+            liq_systick = self.state.liq_last_systick if not self.state.liq_stale else None
+        else:
+            liq_systick = extract_systick(
+                fetch_latest(self.liq_app_telemetry, "liquefaction-app", self.liq_token)
+            )
         checks.append(
             host_restart_check(
                 subsystem="liquefaction",
-                systick=extract_systick(liq_sample),
+                systick=liq_systick,
                 threshold_s=threshold,
             )
         )
@@ -266,6 +324,7 @@ class AlertMonitor:
         return build_recent_deploy(checks, threshold_s=threshold)
 
     def fire(self, alert: dict[str, Any], cooldown_keys: list[str]) -> None:
+        """Route one alert edge through mute, plant modes and incidents."""
         now = time.time()
         if is_muted(self.nanoclaw_root):
             print(
@@ -274,13 +333,79 @@ class AlertMonitor:
                 flush=True,
             )
             return
-        # All keys must be allowed; if any blocked, skip (avoid partial spam)
-        if not all(self.cooldown.allow(k, now) for k in cooldown_keys):
-            blocked = [k for k in cooldown_keys if not self.cooldown.allow(k, now)]
-            print(f"[COOLDOWN] skip {alert.get('kind')} keys={blocked}", flush=True)
-            return
-
+        subsystem = str(alert.get("subsystem") or "unknown")
+        mode = plant_modes.active_mode(self.nanoclaw_root, subsystem, now)
+        alert_id = f"plant-alert-{int(now)}-{int(now * 1000) % 1000}"
+        alert["alert_id"] = alert_id
         alert.setdefault("fired_at", datetime.now().astimezone().isoformat(timespec="seconds"))
+        action, inc = self.incidents.on_event(
+            subsystem, cooldown_keys, now, alert_id=alert_id,
+            suppressed_by=mode["mode"] if mode else None,
+        )
+        alert["incident"] = self._incident_info(inc, new=cooldown_keys if action != "count" else [])
+        if mode:
+            alert["suppressed_by"] = {k: mode.get(k) for k in ("mode", "reason", "set_by", "set_at", "until")}
+        if action != "count":
+            self._archive(alert)
+        if mode:
+            print(f"[SUPPRESSED] {alert.get('kind')} subsystem={subsystem} mode={mode['mode']} "
+                  f"incident={inc.id} action={action}", flush=True)
+            if action == "open" and mode.get("notify") == "line":
+                until = mode.get("until")
+                self._send_line(
+                    f"{subsystem} alert ({alert.get('kind')}) not investigated: {subsystem} is "
+                    f"{mode['mode']}{f' until {until}' if until else ''} ({mode.get('reason') or 'no reason given'}).",
+                    mode.get("chat_jid"),
+                )
+            return
+        if action in ("count", "pending"):
+            self._latest_alert[subsystem] = alert
+            print(f"[INCIDENT] {action} {alert.get('kind')} subsystem={subsystem} incident={inc.id} "
+                  f"events={inc.events} keys={cooldown_keys}", flush=True)
+            return
+        self._dispatch(alert, inc, update=action == "update")
+
+    def _incident_info(self, inc: Incident, *, new: list[str]) -> dict[str, Any]:
+        return {
+            "id": inc.id,
+            "opened_at": datetime.fromtimestamp(inc.opened_at).astimezone().isoformat(timespec="seconds"),
+            "events": inc.events,
+            "briefs": inc.briefs,
+            "signatures": list(inc.signatures),
+            "new_signatures": new,
+        }
+
+    def _archive(self, alert: dict[str, Any]) -> None:
+        # Shared archive first so other sessions can see the edge even before
+        # Ghost finishes the brief. task_id ties IPC ↔ log entry.
+        try:
+            archived = record_alert_event(
+                self.nanoclaw_root,
+                alert_id=alert["alert_id"],
+                alert=alert,
+                dry_run=self.dry_run,
+            )
+            print(
+                f"[ARCHIVE] plant-alerts id={alert['alert_id']} "
+                f"path={archived.get('latest_path')}",
+                flush=True,
+            )
+        except Exception as e:
+            print(f"[WARN] plant-alerts archive failed: {e}", flush=True)
+
+    def _send_line(self, text: str, chat_jid: str | None = None) -> None:
+        result = send_message(
+            nanoclaw_root=self.nanoclaw_root,
+            ipc_group_folder=self.ipc_group_folder,
+            target_jid=chat_jid or self.target_jid,
+            thread_id=self.target_thread_id if not chat_jid or chat_jid == self.target_jid else None,
+            text=text,
+            dry_run=self.dry_run,
+        )
+        print(f"[{'DRY-RUN' if self.dry_run else 'IPC'}] line {result['path']}: {text}", flush=True)
+
+    def _dispatch(self, alert: dict[str, Any], inc: Incident, *, update: bool) -> None:
+        """Enrich and hand the alert to Ghost (full brief or incident update)."""
         try:
             alert["recent_deploy"] = self.snapshot_recent_deploy()
         except Exception as e:
@@ -292,26 +417,8 @@ class AlertMonitor:
             }
             print(f"[WARN] recent_deploy probe failed: {e}", flush=True)
 
-        # Shared archive first so other sessions can see the edge even before
-        # Ghost finishes the brief. task_id ties IPC ↔ log entry.
-        alert_id = f"plant-alert-{int(time.time())}-{int(time.time() * 1000) % 1000}"
-        alert["alert_id"] = alert_id
-        try:
-            archived = record_alert_event(
-                self.nanoclaw_root,
-                alert_id=alert_id,
-                alert=alert,
-                dry_run=self.dry_run,
-            )
-            print(
-                f"[ARCHIVE] plant-alerts id={alert_id} "
-                f"path={archived.get('latest_path')}",
-                flush=True,
-            )
-        except Exception as e:
-            print(f"[WARN] plant-alerts archive failed: {e}", flush=True)
-
-        prompt = build_prompt(alert, alert_id=alert_id)
+        alert_id = alert["alert_id"]
+        prompt = build_prompt(alert, alert_id=alert_id, update=update)
         result = schedule_once(
             nanoclaw_root=self.nanoclaw_root,
             ipc_group_folder=self.ipc_group_folder,
@@ -321,18 +428,66 @@ class AlertMonitor:
             task_id=alert_id,
             dry_run=self.dry_run,
         )
-        for k in cooldown_keys:
-            self.cooldown.mark(k, now)
+        self.incidents.mark_brief(inc, time.time())
 
         mode = "DRY-RUN" if self.dry_run else "IPC"
         rd = alert.get("recent_deploy") or {}
         print(
-            f"[{mode}] fired kind={alert.get('kind')} subsystem={alert.get('subsystem')} "
+            f"[{mode}] fired {'update' if update else 'brief'} kind={alert.get('kind')} "
+            f"subsystem={alert.get('subsystem')} incident={inc.id} "
             f"recent_deploy={rd.get('likely')} path={result['path']}",
             flush=True,
         )
         if self.dry_run:
             print(json_preview(result["payload"]), flush=True)
+
+    def tick_incidents(self, now: float | None = None) -> None:
+        """Release rate-limited updates, close quiet incidents, end expired modes."""
+        now = time.time() if now is None else now
+        for inc in self.incidents.due_updates(now):
+            alert = self._latest_alert.pop(inc.subsystem, None)
+            if alert is None:
+                continue
+            alert["incident"] = self._incident_info(
+                inc, new=[k for k in inc.signatures if k not in alert["incident"]["signatures"]]
+                or alert["incident"]["new_signatures"],
+            )
+            self._dispatch(alert, inc, update=True)
+        for inc in self.incidents.close_quiet(now):
+            self._latest_alert.pop(inc.subsystem, None)
+            quiet_min = int(self.incidents.quiet_s // 60)
+            print(f"[INCIDENT] closed {inc.subsystem} incident={inc.id} events={inc.events} "
+                  f"briefs={inc.briefs} suppressed_by={inc.suppressed_by}", flush=True)
+            if inc.suppressed_by or not inc.briefs:
+                continue
+            still = self._still_active(inc.subsystem)
+            self._send_line(
+                f"{inc.subsystem}: no new alert events for {quiet_min} min, closing the incident "
+                f"opened {et_hhmm(inc.opened_at)} ({inc.events} event{'s' if inc.events != 1 else ''}, "
+                f"{inc.briefs} brief{'s' if inc.briefs != 1 else ''}). {still}".strip()
+            )
+        for entry in plant_modes.expire(self.nanoclaw_root, now):
+            if "bit" in entry:
+                text = (f"{entry.get('subsystem')} {entry.get('severity')} bit {entry.get('bit')} "
+                        f"mute ended; that bit alerts again.")
+            else:
+                text = (f"{entry.get('subsystem')} {entry.get('mode')} window ended "
+                        f"({entry.get('reason') or 'no reason given'}); {entry.get('subsystem')} "
+                        f"alerts are live again.")
+            print(f"[MODE] expired {entry}", flush=True)
+            self._send_line(text, entry.get("chat_jid"))
+
+    def _still_active(self, subsystem: str) -> str:
+        if subsystem == "liquefaction" and self.state.liq_primed:
+            if self.state.liq_stale:
+                return "Liquefaction telemetry is still not reporting."
+            lit = [n for n, on in (("error", self.state.liq_tower_error),
+                                   ("warning", self.state.liq_tower_warn)) if on]
+            if lit:
+                return f"Tower {' and '.join(lit)} light still on."
+        if subsystem == "container" and self.state.bop_primed and self.state.container_lock:
+            return "Supervisor is still locked."
+        return ""
 
     def process_liquefaction(self, sample: dict[str, Any]) -> None:
         liq = sample.get("liquefaction") or sample.get("system", {}).get("liquefaction")
@@ -371,6 +526,19 @@ class AlertMonitor:
         new_error_bits = error_bits - self.state.liq_error_bits
         tower_warn_rise = tower_warn and not self.state.liq_tower_warn
         tower_error_rise = tower_error and not self.state.liq_tower_error
+
+        # Operator-muted HAZOP bits: drop them, and drop a tower rise when
+        # every bit lit on that tower is muted.
+        now = time.time()
+        muted_warn = plant_modes.muted_bits(self.nanoclaw_root, "liquefaction", "warning", now)
+        muted_error = plant_modes.muted_bits(self.nanoclaw_root, "liquefaction", "error", now)
+        if muted_warn or muted_error:
+            new_warn_bits -= muted_warn
+            new_error_bits -= muted_error
+            if tower_warn_rise and warn_bits and warn_bits <= muted_warn:
+                tower_warn_rise = False
+            if tower_error_rise and error_bits and error_bits <= muted_error:
+                tower_error_rise = False
         # Any transition into ERROR (RUN/OFF/DEBUG → ERROR), including cases
         # where the tower light / HAZOP mask did not edge (active_errors can
         # stay 0 while system_state_code becomes 3).
@@ -611,13 +779,79 @@ class AlertMonitor:
         )
         self.fire(alert, [cooldown_key])
 
+    def poll_liquefaction_prom(self, now: float | None = None) -> None:
+        """Liquefaction edges from Mimir, plus stopped / resumed reporting."""
+        assert self.prom is not None
+        now = time.time() if now is None else now
+        if now < self.state.liq_next_prom_poll_at:
+            return
+        self.state.liq_next_prom_poll_at = now + self.liq_prom_poll_s
+        try:
+            got = self.prom.fetch_liquefaction()
+        except Exception as e:
+            if not self.state.liq_prom_error:
+                print(f"[ERROR] liquefaction Prom query: {e} (logged once until it recovers)", flush=True)
+            self.state.liq_prom_error = True
+            return
+        if self.state.liq_prom_error:
+            print("[INFO] liquefaction Prom query recovered", flush=True)
+            self.state.liq_prom_error = False
+        st = self.state
+        age = None if got.sample_ts is None else now - got.sample_ts
+        if age is None or age > self.liq_stale_s:
+            if not st.liq_stale:
+                st.liq_stale = True
+                last = got.sample_ts or st.liq_last_sample_ts
+                if st.liq_seen_fresh:
+                    st.liq_stale_alerted = True
+                    self.fire(
+                        {
+                            "subsystem": "liquefaction",
+                            "kind": "stopped_reporting",
+                            "source": "prom",
+                            "last_sample_at": plant_modes.iso(last) if last else None,
+                            "age_s": int(now - last) if last else None,
+                            "last_state": st.liq_system_state,
+                            "tower": {"warning": st.liq_tower_warn, "error": st.liq_tower_error},
+                            "note": "No new subsystem=\"liquefaction\" samples in Mimir; "
+                                    "liquefaction alerting is blind until they return.",
+                        },
+                        ["liquefaction:stopped_reporting"],
+                    )
+                else:
+                    print(f"[LIQ] telemetry stale at startup (last sample "
+                          f"{plant_modes.iso(last) if last else 'none in 5 min'}); priming silently",
+                          flush=True)
+            return
+        if st.liq_stale:
+            gap_from = st.liq_last_sample_ts
+            if st.liq_stale_alerted and not plant_modes.active_mode(self.nanoclaw_root, "liquefaction", now):
+                gap = f" after {int((got.sample_ts - gap_from) // 60)} min" if gap_from else ""
+                self._send_line(f"liquefaction telemetry is reporting again{gap}; alerting resumed.")
+            print(f"[LIQ] telemetry fresh again (age {int(age)}s); re-priming edges", flush=True)
+            st.liq_stale = False
+            st.liq_stale_alerted = False
+            st.liq_primed = False
+        st.liq_seen_fresh = True
+        st.liq_last_systick = got.systick
+        if got.sample_ts == st.liq_last_sample_ts:
+            return
+        st.liq_last_sample_ts = got.sample_ts
+        self.process_liquefaction(got.sample or {})
+
     def loop_once(self) -> None:
-        liq = fetch_latest(self.liq_telemetry, "liquefaction", self.liq_token)
-        if liq is not None:
+        if self.prom:
             try:
-                self.process_liquefaction(liq)
+                self.poll_liquefaction_prom()
             except Exception as e:
-                print(f"[ERROR] processing liquefaction: {e}", flush=True)
+                print(f"[ERROR] processing liquefaction (prom): {e}", flush=True)
+        else:
+            liq = fetch_latest(self.liq_telemetry, "liquefaction", self.liq_token)
+            if liq is not None:
+                try:
+                    self.process_liquefaction(liq)
+                except Exception as e:
+                    print(f"[ERROR] processing liquefaction: {e}", flush=True)
 
         bop = fetch_latest(self.bop_telemetry, "container", self.bop_token)
         if bop is not None:
@@ -631,10 +865,16 @@ class AlertMonitor:
         except Exception as e:
             print(f"[ERROR] processing automation Loki: {e}", flush=True)
 
+        try:
+            self.tick_incidents()
+        except Exception as e:
+            print(f"[ERROR] incident bookkeeping: {e}", flush=True)
+
     def run(self) -> None:
         print(
             f"Alert monitor starting\n"
-            f"  liq: {self.liq_telemetry}\n"
+            f"  liq: {'grafanacloud-prom (Mimir)' if self.prom else self.liq_telemetry} "
+            f"stale_after={self.liq_stale_s}s\n"
             f"  bop: {self.bop_telemetry}\n"
             f"  loki_abort: "
             f"{'enabled' if (self.loki and self.loki.enabled) else 'disabled'} "
@@ -643,9 +883,11 @@ class AlertMonitor:
             f"  targetJid: {self.target_jid}\n"
             f"  targetThreadId: {self.target_thread_id or '(chat default)'}\n"
             f"  dry_run={self.dry_run} poll={self.poll_interval_s}s "
-            f"cooldown={self.cooldown.cooldown_s}s "
+            f"incident_update_min={self.incidents.update_min_s}s "
+            f"incident_quiet={self.incidents.quiet_s}s "
             f"recent_deploy_window={self.recent_deploy_window_s}s "
-            f"muted={is_muted(self.nanoclaw_root)}\n",
+            f"muted={is_muted(self.nanoclaw_root)} "
+            f"modes={plant_modes.load(self.nanoclaw_root)['subsystems']}\n",
             flush=True,
         )
         while True:
@@ -743,6 +985,21 @@ def main() -> int:
         ),
         loki_client=loki_client if loki_client.enabled else None,
         loki_poll_interval_s=env_float("LOKI_POLL_INTERVAL_S", 15.0),
+        prom_client=(
+            PromClient(
+                grafana_url=loki_client.grafana_url,
+                grafana_token=loki_client.grafana_token,
+                datasource_uid=os.environ.get("PROM_DATASOURCE_UID", "grafanacloud-prom"),
+            )
+            if os.environ.get("LIQ_SOURCE", "prom") == "prom"
+            else None
+        ),
+        liq_prom_poll_s=env_float("LIQ_PROM_POLL_S", 15.0),
+        liq_stale_s=env_float("LIQ_STALE_S", 180.0),
+        incident_quiet_s=env_float("INCIDENT_QUIET_S", 900.0),
+        incident_update_min_s=(
+            env_float("INCIDENT_UPDATE_MIN_S", 0.0) if os.environ.get("INCIDENT_UPDATE_MIN_S") else None
+        ),
     )
 
     if args.once:

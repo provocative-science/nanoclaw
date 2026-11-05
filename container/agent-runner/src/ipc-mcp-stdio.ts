@@ -627,6 +627,43 @@ server.tool(
   },
 );
 
+server.tool(
+  'set_plant_mode',
+  `Declare a plant subsystem's operating mode for the alert monitor, which enforces it: while offline / maintenance / muted, that subsystem's alerts are logged but start no investigation, and other subsystems keep alerting. Use when an operator says a system is shut down, idle for a while, under planned work, back in service, or asks to mute/unmute its alerts. Also mutes individual liquefaction HAZOP bits.
+offline = not operating until someone says otherwise; maintenance = planned work with an end (defaults to 4h); muted = alerts off without a plant state; in_service = clear the mode (or unmute the given bits).
+Name the operator in set_by and quote or summarize their words in reason. Confirm the returned message to the operator.`,
+  {
+    subsystem: z.enum(['liquefaction', 'container', 'airbed']),
+    mode: z.enum(['offline', 'maintenance', 'muted', 'in_service']),
+    until: z.string().optional().describe('End of the window: duration like "90m", "12h", "3d", or ISO time WITH offset (e.g. 2026-11-05T17:00:00-05:00). Omit for no end.'),
+    reason: z.string().describe("The operator's words or a short summary, e.g. 'Spark: not running the container for the foreseeable future'"),
+    set_by: z.string().describe('Operator who asked (display name)'),
+    notify: z.enum(['none', 'line']).optional().describe('line = post one plain line when a suppressed alert opens an incident (default none)'),
+    bits: z
+      .object({ severity: z.enum(['warning', 'error']), bits: z.array(z.number().int().min(0).max(63)).min(1) })
+      .optional()
+      .describe('liquefaction only: mute (mode muted) or unmute (mode in_service) these HAZOP bits instead of the whole subsystem'),
+  },
+  async (args) => {
+    if (evalMode) return { content: [{ type: 'text' as const, text: 'Eval mode: plant modes are not changed.' }] };
+    const requestId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    writeIpcFile(TASKS_DIR, { type: 'plant_mode', requestId, ...args, timestamp: new Date().toISOString() });
+    const resultPath = path.join(INPUT_DIR, `plant_mode_result_${requestId}.json`);
+    for (let i = 0; i < 30; i++) {
+      await new Promise((r) => setTimeout(r, 500));
+      if (!fs.existsSync(resultPath)) continue;
+      try {
+        const result = JSON.parse(fs.readFileSync(resultPath, 'utf-8')) as { ok: boolean; message: string };
+        fs.unlinkSync(resultPath);
+        return { content: [{ type: 'text' as const, text: result.message }], isError: !result.ok };
+      } catch {
+        /* partially written; retry */
+      }
+    }
+    return { content: [{ type: 'text' as const, text: 'Plant mode request queued but not confirmed within 15s.' }], isError: true };
+  },
+);
+
 // Start the stdio transport
 const transport = new StdioServerTransport();
 await server.connect(transport);

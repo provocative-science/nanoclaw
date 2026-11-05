@@ -11,6 +11,7 @@ import path from 'path';
 import { GHOST_DATA_DIR, GROUPS_DIR } from './config.js';
 import { KnowledgeEntry, listEntries } from './knowledge.js';
 import { logger } from './logger.js';
+import { describePlantModes } from './plant-modes.js';
 
 export type BriefingLevel = 'compact' | 'full';
 
@@ -23,6 +24,9 @@ export interface BriefingOptions {
   excludeEntryIds?: string[];
   /** Replay evals: the alert being replayed (its archived brief is the old answer). */
   excludeAlertIds?: string[];
+  /** Replay evals: today's operator modes do not apply to past alerts. */
+  includeModes?: boolean;
+  plantModesFile?: string;
 }
 
 const MAX_FULL_CHARS = 9_000;
@@ -166,6 +170,17 @@ export function buildBriefing(
     .sort((a, b) => (b.updated || '').localeCompare(a.updated || ''));
 
   const parts: string[] = [];
+  const modes =
+    opts.includeModes === false
+      ? []
+      : describePlantModes(now, opts.plantModesFile);
+  if (modes.length) {
+    parts.push(
+      '### Operational modes (operator-declared; the alert monitor enforces them)',
+      ...modes,
+      '- Change with `mcp__nanoclaw__set_plant_mode` when an operator declares a system offline, in maintenance or back in service.',
+    );
+  }
   if (rules.length) {
     parts.push(
       '### Standing rules (from Spark)',

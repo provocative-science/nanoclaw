@@ -77,6 +77,7 @@ import {
   muteAckText,
   writePlantAlertMuteState,
 } from './plant-alert-mute.js';
+import { findPlantModeCommandInMessages, setPlantMode } from './plant-modes.js';
 import {
   findModelEscalateInMessages,
   invalidModelAckText,
@@ -112,8 +113,10 @@ const channels: Channel[] = [];
 const queue = new GroupQueue();
 
 /**
- * Host-side plant-alert mute/unmute (@Ghost mute alerts / unmute alerts).
- * Writes data/alert-monitor/mute.json for the host monitor; skips the agent.
+ * Host-side plant-alert commands, handled without an agent run:
+ * "@Ghost mute alerts" / "unmute alerts" (everything, data/alert-monitor/mute.json)
+ * and per-subsystem modes like "mute container alerts for 12h" or
+ * "container offline" (data/alert-monitor/plant-modes.json).
  * Returns true if handled.
  */
 async function handlePlantAlertMuteCommand(
@@ -121,6 +124,27 @@ async function handlePlantAlertMuteCommand(
   messages: NewMessage[],
   channel: Channel,
 ): Promise<boolean> {
+  const scoped = findPlantModeCommandInMessages(messages);
+  if (scoped) {
+    const { request, message } = scoped;
+    const result = setPlantMode({
+      ...request,
+      setBy: message.sender_name || message.sender,
+      chatJid,
+    });
+    try {
+      await channel.sendMessage(
+        chatJid,
+        result.message,
+        message.thread_id || undefined,
+      );
+    } catch (err) {
+      logger.warn({ err, chatJid }, 'Failed to send plant-mode ack');
+    }
+    lastAgentTimestamp[chatJid] = messages[messages.length - 1].timestamp;
+    saveState();
+    return true;
+  }
   const found = findMuteCommandInMessages(messages);
   if (!found) return false;
 

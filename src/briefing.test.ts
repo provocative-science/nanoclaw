@@ -132,4 +132,36 @@ describe('buildBriefing', () => {
     expect(b).not.toContain('a-replayed');
     expect(b).not.toContain('Recent changes');
   });
+
+  it('lists operator plant modes, except in replays', () => {
+    const file = path.join(tmp, 'data', 'alert-monitor', 'plant-modes.json');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(
+      file,
+      JSON.stringify({
+        subsystems: {
+          container: {
+            mode: 'offline',
+            until: null,
+            reason: 'not running for the foreseeable future',
+            set_by: 'Spark',
+            set_at: '2026-10-29T11:00:00Z',
+            chat_jid: null,
+            notify: 'none',
+          },
+        },
+        muted_bits: [],
+      }),
+    );
+    const b = buildBriefing('container watchdog', 'compact', NOW);
+    expect(b).toContain('### Operational modes');
+    expect(b).toContain('container: OFFLINE since Oct 29, 07:00 ET');
+    expect(
+      buildBriefing('container watchdog', 'compact', {
+        now: NOW,
+        includeModes: false,
+      }),
+    ).not.toContain('Operational modes');
+    fs.rmSync(file);
+  });
 });
