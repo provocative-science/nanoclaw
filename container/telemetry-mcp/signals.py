@@ -188,7 +188,10 @@ def lookup(
 
     rules = []
     ql = q.lower()
+    rule_sys = "container" if sys_filter in ("bop", "dacs") else sys_filter
     for r in d.get("rules", []):
+        if rule_sys and rule_sys != "supervisor" and r.get("system") != rule_sys:
+            continue
         names = [r["name"]] + [ra.get("recovery", "") for ra in r.get("recovery_actions", [])]
         if any(ql == n or (len(ql) >= 4 and ql in n) for n in names if n) or (
             qtokens and all(t in r["name"] for t in qtokens)
@@ -205,6 +208,12 @@ def lookup(
     }
     if rules:
         out["rules"] = rules[:6]
+        shared = sorted({r["name"] for r in rules if sum(x["name"] == r["name"] for x in rules) > 1})
+        if shared:
+            out["rules_note"] = (
+                f"{', '.join(shared)} is defined by more than one system; use the entry whose `system` / "
+                "`applies_to` matches the alerting host (or pass system=airbed|container)."
+            )
     stations = stations_for_text(query)
     if stations:
         out["stations"] = stations

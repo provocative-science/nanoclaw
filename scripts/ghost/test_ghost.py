@@ -63,6 +63,19 @@ class SourceParseTests(unittest.TestCase):
         self.assertFalse(sp.missing_input_trips("if x < self.min { return Some(Box::new(R {})); } None"))
         tuple_form = "if let (Some(a), Some(b)) = (a, b) { } else {\n return Some((Box::new(R { step: 0 }), \"\".into()));\n }"
         self.assertTrue(sp.missing_input_trips(tuple_form))
+        expression_form = (
+            "if let Some(t) = hot_loop_temp {\n if t < self.min_temp || t > self.max_temp {\n"
+            " Some((Box::new(R { step: 0 }), format!(\"out\")))\n } else { None }\n"
+            "} else {\n Some((Box::new(R { step: 0 }), format!(\"\")))\n }"
+        )
+        self.assertTrue(sp.missing_input_trips(expression_form), "container hot_loop_temp_watchdog form")
+        tuple_expression_form = (
+            "if let (Some(p), Some(v)) =\n (p, v)\n {\n if v && p > self.max { Some((Box::new(R { step: 0 }), format!(\"\"))) }"
+            " else { None }\n } else {\n Some((Box::new(R { step: 0 }), format!(\"\")))\n }"
+        )
+        self.assertTrue(sp.missing_input_trips(tuple_expression_form), "container extraction_bag_watchdog form")
+        out_of_range_only = "if t >= self.min && t <= self.max { None } else { Some((Box::new(R {}), String::new())) }"
+        self.assertFalse(sp.missing_input_trips(out_of_range_only))
         rules = sp.parse_rule_file(RULE, "bop")
         wd = next(r for r in rules if r["name"] == "warm_tank_level_watchdog")
         self.assertTrue(wd["missing_input_trips"])

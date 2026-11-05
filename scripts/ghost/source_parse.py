@@ -336,9 +336,35 @@ _MISSING_TRIP_RES = (
 )
 
 
+_IF_LET_SOME_RE = re.compile(r"\bif\s+let\s+(?:Some\s*\(|\(\s*Some\s*\()")
+_ELSE_SOME_BOX_RE = re.compile(r"\s*else\s*\{\s*(?:return\s+)?Some\(\s*\(?\s*Box::new\(")
+
+
+def _block_end(text: str, open_idx: int) -> int:
+    """Index just past the `}` matching the `{` at open_idx (or len(text))."""
+    depth = 0
+    for i in range(open_idx, len(text)):
+        if text[i] == "{":
+            depth += 1
+        elif text[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return i + 1
+    return len(text)
+
+
 def missing_input_trips(body: str) -> bool:
     """True when the rule starts its recovery because an input is missing/stale."""
-    return any(r.search(body) for r in _MISSING_TRIP_RES)
+    if any(r.search(body) for r in _MISSING_TRIP_RES):
+        return True
+    # Expression form: `if let Some(t) = t { …range check… } else { Some((Box::new(…), …)) }`.
+    # Only an `else` that closes an `if let Some` counts; a plain `if in_range { None } else { Some(…) }`
+    # is an out-of-range trip.
+    for m in _IF_LET_SOME_RE.finditer(body):
+        open_idx = body.find("{", m.end())
+        if open_idx != -1 and _ELSE_SOME_BOX_RE.match(body, _block_end(body, open_idx)):
+            return True
+    return False
 
 
 def parse_rule_file(text: str, module: str) -> list[dict[str, Any]]:
