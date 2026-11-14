@@ -133,6 +133,16 @@ When you learn something important (group-local):
 - Split files larger than 500 lines into folders
 - Keep an index in your memory for the files you create
 
+## Hindsight memory
+
+Hindsight is long-term memory shared with Spark's other AI agents. Use the `mcp__hindsight__*` tools. Stay on the `provocative` bank — this MCP connection is already scoped to it; do not switch banks.
+
+- At the start of a non-trivial task, or when Spark refers to past work, people, or projects, call `mcp__hindsight__recall` for relevant context. Use `mcp__hindsight__reflect` when you need a synthesized answer.
+- Save with `mcp__hindsight__retain`: durable facts, decisions and their reasons, Spark's preferences, project status changes, and lessons learned. Write one clear, self-contained statement per memory, with dates where relevant; add context or tags when the tool supports them.
+- Do not save chit-chat, transient task steps, raw logs or large outputs, or duplicates of what's already there. Never save secrets (keys, tokens, passwords, credentials, or personal contact data).
+- Deletion is disabled. To correct a fact, retain a new memory that states it supersedes the old one.
+- Write memories that another agent can understand without this conversation.
+
 ## Message Formatting
 
 Format messages based on the channel you're responding to. Check your group folder name:

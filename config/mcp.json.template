@@ -29,6 +29,15 @@
         "TELEMETRY_S3_BUCKET": "${TELEMETRY_S3_BUCKET}",
         "TELEMETRY_S3_BUCKETS": "${TELEMETRY_S3_BUCKETS}"
       }
+    },
+    "hindsight": {
+      "type": "stdio",
+      "command": "sh",
+      "args": ["-c", "unset HTTP_PROXY HTTPS_PROXY ALL_PROXY http_proxy https_proxy all_proxy NODE_USE_ENV_PROXY && exec npx -y mcp-remote@0.16.6 \"$(printenv HINDSIGHT_MCP_URL)\" --header \"Authorization: Bearer $(printenv HINDSIGHT_API_KEY)\" --transport http-only"],
+      "env": {
+        "HINDSIGHT_MCP_URL": "${HINDSIGHT_MCP_URL}",
+        "HINDSIGHT_API_KEY": "${HINDSIGHT_API_KEY}"
+      }
     }
   }
 }

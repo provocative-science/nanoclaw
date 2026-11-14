@@ -570,7 +570,8 @@ async function runQuery(
         'mcp__nanoclaw__*',
         'mcp__notion__*',
         ...(dropGrafana ? [] : ['mcp__grafana__*']),
-        'mcp__telemetry__*'
+        'mcp__telemetry__*',
+        'mcp__hindsight__*'
       ],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
