@@ -143,6 +143,11 @@ Hindsight is long-term memory shared with Spark's other AI agents. Use the `mcp_
 - Deletion is disabled. To correct a fact, retain a new memory that states it supersedes the old one.
 - Write memories that another agent can understand without this conversation.
 
+Ghost-specific use:
+- Learn from conversations with users about how process parts work and how subsystems influence each other. Retain those explanations as clear, self-contained statements.
+- When you analyze plant or process data, retain dated findings and baselines as text (for example: "As of Nov 2026, airbed CO2 production is typically 70-100 SLPM for the first hour after startup, then 50-70 SLPM"). Hindsight does not read raw sensor data; it only keeps the conclusions you write.
+- Before diagnosing or explaining system behavior, recall design-choice background saved by Cursor and Neo, as well as prior baselines and findings, with `mcp__hindsight__recall` or `mcp__hindsight__reflect`.
+
 ## Message Formatting
 
 Format messages based on the channel you're responding to. Check your group folder name:
